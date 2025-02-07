@@ -3,7 +3,7 @@ import threading
 import time
 import sys
 from queue import Queue, Empty
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List, Set
 from schemas import ChatMessage, MessageType, ServerResponse, Status
 from protocol import Protocol, ProtocolFactory
 
@@ -24,10 +24,9 @@ class ChatClient:
         self._lock = threading.Lock()
         self.message_queue: Queue[Tuple[str, Optional[str]]] = Queue()
         self.input_thread = None
-        self.protocol = protocol or ProtocolFactory.create(
-            "json"
-        )  # Default to JSON if not specified
+        self.protocol = protocol or ProtocolFactory.create("json")
         self.receive_buffer = b""
+        self.unread_messages: Set[int] = set()  # Track message IDs for marking as read
 
     def connect(self):
         try:
@@ -57,19 +56,71 @@ class ChatClient:
 
     def handle_input(self):
         print("Type your message ('quit' to exit)")
-        print("For DMs use: username;your message")
-        print("For group chat just type your message")
+        print("Commands:")
+        print("  username;message - Send DM to user")
+        print("  /fetch [n]      - Fetch n unread messages (default 10)")
+        print("  /read           - Mark displayed messages as read")
+        print("  /quit           - Exit the chat")
 
         while self.connected:
             try:
                 message = input()
-                if message.lower() == "quit":
-                    self.message_queue.put(("quit", None))
-                    break
-                self.message_queue.put(("message", message))
+                if not message:
+                    continue
+
+                if message.startswith("/"):
+                    self.handle_command(message[1:])
+                else:
+                    self.message_queue.put(("message", message))
             except (EOFError, KeyboardInterrupt):
                 self.message_queue.put(("quit", None))
                 break
+
+    def handle_command(self, command: str):
+        parts = command.split()
+        cmd = parts[0].lower()
+
+        if cmd == "quit":
+            self.message_queue.put(("quit", None))
+        elif cmd == "fetch":
+            try:
+                count = int(parts[1]) if len(parts) > 1 else 10
+                self.fetch_messages(count)
+            except ValueError:
+                print("Invalid count. Usage: /fetch [n]")
+        elif cmd == "read":
+            self.mark_messages_read()
+        else:
+            print("Unknown command. Available commands:")
+            print("  /fetch [n] - Fetch n unread messages")
+            print("  /read      - Mark displayed messages as read")
+            print("  /quit      - Exit the chat")
+
+    def fetch_messages(self, count: int = 10):
+        """Request unread messages from the server"""
+        fetch_message = ChatMessage(
+            username=self.username,
+            content="",
+            message_type=MessageType.FETCH,
+            fetch_count=count,
+        )
+        self.send_message(fetch_message)
+
+    def mark_messages_read(self):
+        """Mark displayed messages as read"""
+        if not self.unread_messages:
+            print("No messages to mark as read")
+            return
+
+        mark_read_message = ChatMessage(
+            username=self.username,
+            content="",
+            message_type=MessageType.MARK_READ,
+            message_ids=list(self.unread_messages),
+        )
+        if self.send_message(mark_read_message):
+            self.unread_messages.clear()
+            print("Messages marked as read")
 
     def send_message(self, message: ChatMessage) -> bool:
         if not self.connected:
@@ -139,6 +190,10 @@ class ChatClient:
                             break
 
                     if response.data:
+                        # Track message ID for marking as read later
+                        if response.data.message_id:
+                            self.unread_messages.add(response.data.message_id)
+
                         # Handle different message types
                         if response.data.message_type == MessageType.CHAT:
                             print(f"{response.data.username}: {response.data.content}")
@@ -156,6 +211,10 @@ class ChatClient:
                             MessageType.LEAVE,
                         ]:
                             print(f"*** {response.data.content} ***")
+
+                        # Show unread count if provided
+                        if response.unread_count is not None:
+                            print(f"({response.unread_count} more unread messages)")
 
             except (ConnectionError, OSError) as e:
                 if self.connected:  # Only print if we haven't initiated the disconnect
@@ -233,7 +292,6 @@ if __name__ == "__main__":
         sys.exit(1)
 
     username = sys.argv[1]
-    # Can specify protocol type: "json" or "custom"
     protocol = ProtocolFactory.create("json")
     client = ChatClient(username, protocol=protocol)
     try:

@@ -4,6 +4,7 @@ import json
 from typing import Dict, List, Set, Optional
 from schemas import ChatMessage, ServerResponse, MessageType, Status
 from protocol import Protocol, ProtocolFactory
+from database import Database
 
 
 class ChatServer:
@@ -21,10 +22,9 @@ class ChatServer:
         self.usernames: Dict[str, socket.socket] = {}  # username -> socket
         self.lock = threading.Lock()
         self.running = True
-        self.protocol = protocol or ProtocolFactory.create(
-            "json"
-        )  # Default to JSON if not specified
-        self.client_buffers: Dict[socket.socket, bytes] = {}  # Buffer for each client
+        self.protocol = protocol or ProtocolFactory.create("json")
+        self.client_buffers: Dict[socket.socket, bytes] = {}
+        self.db = Database()
 
     def start(self):
         try:
@@ -53,11 +53,17 @@ class ChatServer:
             self.shutdown()
 
     def send_to_client(
-        self, client_socket: socket.socket, message: ChatMessage
+        self,
+        client_socket: socket.socket,
+        message: ChatMessage,
+        unread_count: Optional[int] = None,
     ) -> bool:
         try:
             response = ServerResponse(
-                status=Status.SUCCESS, message="new_message", data=message
+                status=Status.SUCCESS,
+                message="new_message",
+                data=message,
+                unread_count=unread_count,
             )
             data = self.protocol.serialize_response(response)
             framed_data = self.protocol.frame_message(data)
@@ -66,8 +72,54 @@ class ChatServer:
         except:
             return False
 
+    def handle_dm(self, message: ChatMessage, sender_socket: socket.socket) -> None:
+        """Handle direct message, storing and delivering as appropriate"""
+        if not message.recipients:
+            return
+
+        # Store the message
+        message_id = self.db.store_message(message)
+        message.message_id = message_id
+
+        # Try to deliver if recipient is online
+        recipient = message.recipients[0]
+        if recipient in self.usernames:
+            recipient_socket = self.usernames[recipient]
+            if self.send_to_client(recipient_socket, message):
+                self.db.mark_delivered(message_id)
+
+    def handle_fetch_request(
+        self, message: ChatMessage, client_socket: socket.socket
+    ) -> None:
+        """Handle request to fetch unread messages"""
+        if not message.fetch_count:
+            message.fetch_count = 10  # Default limit
+
+        # Get unread messages
+        messages = self.db.get_unread_messages(
+            recipient=message.username, limit=message.fetch_count
+        )
+
+        # Get total unread count for progress tracking
+        total_unread = self.db.get_unread_count(message.username)
+
+        # Send each message and mark as delivered if successful
+        for msg in messages:
+            if self.send_to_client(client_socket, msg, unread_count=total_unread):
+                if msg.message_id is not None:
+                    self.db.mark_delivered(msg.message_id)
+
+    def handle_mark_read(self, message: ChatMessage) -> None:
+        """Handle request to mark messages as read"""
+        if message.message_ids:
+            self.db.mark_read(message.message_ids, message.username)
+
     def send_to_recipients(self, message: ChatMessage, exclude_socket=None):
         """Send message to specific recipients or broadcast if no recipients specified"""
+        if message.message_type == MessageType.DM:
+            self.handle_dm(message, exclude_socket)
+            return
+
         with self.lock:
             if message.recipients:
                 # Send to specific recipients
@@ -76,7 +128,6 @@ class ChatServer:
                         recipient_socket = self.usernames[recipient]
                         if recipient_socket != exclude_socket:
                             if not self.send_to_client(recipient_socket, message):
-                                # If send fails, schedule the client for removal
                                 threading.Thread(
                                     target=self.remove_client,
                                     args=(recipient_socket, True),
@@ -93,7 +144,6 @@ class ChatServer:
                     continue
 
                 if not self.send_to_client(client_socket, message):
-                    # If send fails, schedule the client for removal
                     threading.Thread(
                         target=self.remove_client,
                         args=(client_socket, True),
@@ -108,10 +158,8 @@ class ChatServer:
                 if not data:
                     break
 
-                # Accumulate data in the client's buffer
                 self.client_buffers[client_socket] += data
 
-                # Process complete messages
                 while True:
                     message_data, self.client_buffers[client_socket] = (
                         self.protocol.extract_message(
@@ -126,7 +174,6 @@ class ChatServer:
                     if username is None:
                         # First message should be the username
                         username = message.username
-                        # Check if username is already taken
                         with self.lock:
                             if username in self.usernames:
                                 error_response = ServerResponse(
@@ -142,7 +189,7 @@ class ChatServer:
                             self.clients[client_socket] = username
                             self.usernames[username] = client_socket
 
-                        # Broadcast join message
+                        # Send join notification
                         join_message = ChatMessage(
                             username=username,
                             content=f"{username} has joined the chat",
@@ -150,20 +197,32 @@ class ChatServer:
                         )
                         self.send_to_recipients(join_message)
                         print(f"Client {username} joined the chat")
+
+                        # Check for unread messages
+                        unread_count = self.db.get_unread_count(username)
+                        if unread_count > 0:
+                            notification = ChatMessage(
+                                username="System",
+                                content=f"You have {unread_count} unread messages. Use /fetch [n] to retrieve them.",
+                                message_type=MessageType.CHAT,
+                            )
+                            self.send_to_client(client_socket, notification)
                         continue
 
                     if message.message_type == MessageType.LEAVE:
                         print(f"Client {username} left the chat")
                         break
-
-                    # Handle the message based on its type
-                    if message.message_type == MessageType.DM:
-                        # For DMs, only send to specified recipients
+                    elif message.message_type == MessageType.FETCH:
+                        self.handle_fetch_request(message, client_socket)
+                    elif message.message_type == MessageType.MARK_READ:
+                        self.handle_mark_read(message)
+                    elif message.message_type == MessageType.DM:
                         if not message.recipients:
-                            continue  # Ignore DMs without recipients
+                            continue
                         print(f"DM from {username} to {message.recipients}")
-
-                    self.send_to_recipients(message)
+                        self.handle_dm(message, client_socket)
+                    else:
+                        self.send_to_recipients(message)
 
         except Exception as e:
             print(f"Error handling client: {e}")
@@ -193,7 +252,6 @@ class ChatServer:
                 content=f"{username} has left the chat",
                 message_type=MessageType.LEAVE,
             )
-            # Broadcast the leave message before closing the socket
             self.send_to_recipients(leave_message, exclude_socket=client_socket)
             print(f"Broadcasting that {username} has left")
 
@@ -226,7 +284,6 @@ class ChatServer:
 
 
 if __name__ == "__main__":
-    # Can specify protocol type: "json" or "custom"
     protocol = ProtocolFactory.create("json")
     server = ChatServer(protocol=protocol)
     try:
