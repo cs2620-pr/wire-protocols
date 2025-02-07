@@ -187,13 +187,26 @@ class ChatServer:
                     message = self.protocol.deserialize_message(message_data)
 
                     if username is None:
-                        # First message should be the username
-                        username = message.username
-                        with self.lock:
-                            if username in self.usernames:
+                        # First message should be login or register
+                        if message.message_type not in [
+                            MessageType.LOGIN,
+                            MessageType.REGISTER,
+                        ]:
+                            error_response = ServerResponse(
+                                status=Status.ERROR,
+                                message="Please login or register first",
+                                data=None,
+                            )
+                            data = self.protocol.serialize_response(error_response)
+                            framed_data = self.protocol.frame_message(data)
+                            client_socket.send(framed_data)
+                            return
+
+                        if message.message_type == MessageType.REGISTER:
+                            if self.db.user_exists(message.username):
                                 error_response = ServerResponse(
                                     status=Status.ERROR,
-                                    message="Username already taken",
+                                    message="Username already exists. Please login instead.",
                                     data=None,
                                 )
                                 data = self.protocol.serialize_response(error_response)
@@ -201,31 +214,104 @@ class ChatServer:
                                 client_socket.send(framed_data)
                                 return
 
-                            self.clients[client_socket] = username
-                            self.usernames[username] = client_socket
+                            if not message.password:
+                                error_response = ServerResponse(
+                                    status=Status.ERROR,
+                                    message="Password is required",
+                                    data=None,
+                                )
+                                data = self.protocol.serialize_response(error_response)
+                                framed_data = self.protocol.frame_message(data)
+                                client_socket.send(framed_data)
+                                return
 
-                        # Send join notification
-                        join_message = ChatMessage(
-                            username=username,
-                            content=f"{username} has joined the chat",
-                            message_type=MessageType.JOIN,
-                        )
-                        self.send_to_recipients(join_message)
-                        print(f"Client {username} joined the chat")
+                            if self.db.create_user(message.username, message.password):
+                                success_response = ServerResponse(
+                                    status=Status.SUCCESS,
+                                    message="Registration successful. Please login.",
+                                    data=None,
+                                )
+                                data = self.protocol.serialize_response(
+                                    success_response
+                                )
+                                framed_data = self.protocol.frame_message(data)
+                                client_socket.send(framed_data)
+                                return
+                            else:
+                                error_response = ServerResponse(
+                                    status=Status.ERROR,
+                                    message="Registration failed",
+                                    data=None,
+                                )
+                                data = self.protocol.serialize_response(error_response)
+                                framed_data = self.protocol.frame_message(data)
+                                client_socket.send(framed_data)
+                                return
 
-                        # Check for unread messages
-                        unread_count = self.db.get_unread_count(username)
-                        if unread_count > 0:
-                            notification = ChatMessage(
-                                username="System",
-                                content=f"You have {unread_count} unread messages. Use /fetch [n] to retrieve them.",
-                                message_type=MessageType.CHAT,
+                        elif message.message_type == MessageType.LOGIN:
+                            if not message.password:
+                                error_response = ServerResponse(
+                                    status=Status.ERROR,
+                                    message="Password is required",
+                                    data=None,
+                                )
+                                data = self.protocol.serialize_response(error_response)
+                                framed_data = self.protocol.frame_message(data)
+                                client_socket.send(framed_data)
+                                return
+
+                            if not self.db.verify_user(
+                                message.username, message.password
+                            ):
+                                error_response = ServerResponse(
+                                    status=Status.ERROR,
+                                    message="Invalid username or password",
+                                    data=None,
+                                )
+                                data = self.protocol.serialize_response(error_response)
+                                framed_data = self.protocol.frame_message(data)
+                                client_socket.send(framed_data)
+                                return
+
+                            # Check if user is already logged in
+                            if message.username in self.usernames:
+                                error_response = ServerResponse(
+                                    status=Status.ERROR,
+                                    message="User already logged in",
+                                    data=None,
+                                )
+                                data = self.protocol.serialize_response(error_response)
+                                framed_data = self.protocol.frame_message(data)
+                                client_socket.send(framed_data)
+                                return
+
+                            username = message.username
+                            with self.lock:
+                                self.clients[client_socket] = username
+                                self.usernames[username] = client_socket
+
+                            # Send join notification
+                            join_message = ChatMessage(
+                                username=username,
+                                content=f"{username} has joined the chat",
+                                message_type=MessageType.JOIN,
                             )
-                            self.send_to_client(client_socket, notification)
-                        continue
+                            self.send_to_recipients(join_message)
+                            print(f"Client {username} joined the chat")
 
-                    if message.message_type == MessageType.LEAVE:
-                        print(f"Client {username} left the chat")
+                            # Check for unread messages
+                            unread_count = self.db.get_unread_count(username)
+                            if unread_count > 0:
+                                notification = ChatMessage(
+                                    username="System",
+                                    content=f"You have {unread_count} unread messages. Use /fetch [n] to retrieve them.",
+                                    message_type=MessageType.CHAT,
+                                )
+                                self.send_to_client(client_socket, notification)
+                            continue
+
+                    if message.message_type == MessageType.LOGOUT:
+                        print(f"Client {username} logged out")
                         break
                     elif message.message_type == MessageType.FETCH:
                         self.handle_fetch_request(message, client_socket)

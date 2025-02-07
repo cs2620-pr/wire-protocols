@@ -4,6 +4,42 @@
 
 ## 02/07
 
+### Update 5
+
+Added user authentication functionality:
+
+1. User Management:
+   - Implemented secure user registration and login
+   - Passwords are hashed using bcrypt before storage
+   - Added new users table in SQLite database
+   - Foreign key constraints ensure data integrity
+
+2. Authentication Flow:
+   - New message types: LOGIN, REGISTER, LOGOUT
+   - Users must authenticate before accessing chat
+   - Registration creates account, then prompts for login
+   - Prevents multiple logins from same user
+
+3. Security Features:
+   - Password hashing with bcrypt for secure storage
+   - Server-side validation of credentials
+   - Protection against duplicate usernames
+   - Session management to prevent multiple logins
+
+4. User Experience:
+   - Clear prompts for login/register choice
+   - Immediate feedback on authentication status
+   - Automatic notification of unread messages on login
+   - Clean logout process with proper cleanup
+
+5. Design Decisions:
+   - Separate authentication from message handling
+   - Stateful session management
+   - Server-side enforcement of authentication
+   - Database-backed persistent user storage
+
+The system now provides secure user authentication while maintaining a smooth user experience.
+
 ### Update 4
 
 Added message deletion functionality:

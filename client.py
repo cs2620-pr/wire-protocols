@@ -33,16 +33,15 @@ class ChatClient:
             self.client_socket.connect((self.host, self.port))
             self.connected = True
 
-            # Send initial join message with username
-            join_message = ChatMessage(
-                username=self.username, content="", message_type=MessageType.JOIN
-            )
-            self.send_message(join_message)
-
             # Start receiving messages in a separate thread
             receive_thread = threading.Thread(target=self.receive_messages)
             receive_thread.daemon = True
             receive_thread.start()
+
+            # Handle authentication
+            if not self.authenticate():
+                self.disconnect()
+                return False
 
             # Start input thread
             self.input_thread = threading.Thread(target=self.handle_input)
@@ -54,6 +53,58 @@ class ChatClient:
             print(f"Connection failed: {e}")
             return False
 
+    def authenticate(self) -> bool:
+        """Handle user authentication"""
+        while True:
+            action = input("Enter 'login' or 'register': ").lower()
+            if action not in ["login", "register"]:
+                print("Invalid choice. Please enter 'login' or 'register'")
+                continue
+
+            password = input("Enter password: ")
+            message = ChatMessage(
+                username=self.username,
+                content="",
+                message_type=(
+                    MessageType.LOGIN if action == "login" else MessageType.REGISTER
+                ),
+                password=password,
+            )
+
+            if not self.send_message(message):
+                return False
+
+            # Wait for response
+            try:
+                data = self.client_socket.recv(1024)
+                if not data:
+                    print("Connection closed by server")
+                    return False
+
+                self.receive_buffer += data
+                message_data, self.receive_buffer = self.protocol.extract_message(
+                    self.receive_buffer
+                )
+                if message_data is None:
+                    print("Invalid response from server")
+                    return False
+
+                response = self.protocol.deserialize_response(message_data)
+                print(response.message)
+
+                if response.status == Status.SUCCESS:
+                    if action == "register":
+                        # If registration successful, prompt for login
+                        continue
+                    return True
+                elif action == "login" and "already logged in" in response.message:
+                    return False
+            except Exception as e:
+                print(f"Authentication error: {e}")
+                return False
+
+        return False
+
     def handle_input(self):
         print("Type your message ('quit' to exit)")
         print("Commands:")
@@ -61,6 +112,7 @@ class ChatClient:
         print("  /fetch [n]      - Fetch n unread messages (default 10)")
         print("  /read           - Mark displayed messages as read")
         print("  /delete id [id] - Delete messages by ID")
+        print("  /logout         - Logout from chat")
         print("  /quit           - Exit the chat")
 
         while self.connected:
@@ -83,6 +135,14 @@ class ChatClient:
 
         if cmd == "quit":
             self.message_queue.put(("quit", None))
+        elif cmd == "logout":
+            logout_message = ChatMessage(
+                username=self.username,
+                content="",
+                message_type=MessageType.LOGOUT,
+            )
+            if self.send_message(logout_message):
+                self.message_queue.put(("quit", None))
         elif cmd == "fetch":
             try:
                 count = int(parts[1]) if len(parts) > 1 else 10
@@ -105,6 +165,7 @@ class ChatClient:
             print("  /fetch [n] - Fetch n unread messages")
             print("  /read      - Mark displayed messages as read")
             print("  /delete id [id] - Delete messages by ID")
+            print("  /logout    - Logout from chat")
             print("  /quit      - Exit the chat")
 
     def fetch_messages(self, count: int = 10):
@@ -189,9 +250,8 @@ class ChatClient:
             try:
                 data = self.client_socket.recv(1024)
                 if not data:
-                    print("Lost connection to server")
-                    self.connected = False
-                    self.message_queue.put(("quit", None))
+                    print("Connection closed by server")
+                    self.disconnect()
                     break
 
                 self.receive_buffer += data
@@ -203,51 +263,31 @@ class ChatClient:
                         break
 
                     response = self.protocol.deserialize_response(message_data)
-
                     if response.status == Status.ERROR:
                         print(f"Error: {response.message}")
-                        if response.message == "Username already taken":
-                            self.connected = False
-                            self.message_queue.put(("quit", None))
+                        if "not logged in" in response.message.lower():
+                            self.disconnect()
                             break
+                        continue
 
-                    if response.data:
-                        # Track message ID for marking as read later
-                        if response.data.message_id:
-                            self.unread_messages.add(response.data.message_id)
+                    if response.data is None:
+                        print(response.message)
+                        continue
 
-                        # Handle different message types
-                        if response.data.message_type == MessageType.CHAT:
-                            print(f"{response.data.username}: {str(response.data)}")
-                        elif response.data.message_type == MessageType.DM:
-                            if response.data.username == self.username:
-                                print(str(response.data))
-                            else:
-                                print(
-                                    f"From {response.data.username}: {str(response.data)}"
-                                )
-                        elif response.data.message_type in [
-                            MessageType.JOIN,
-                            MessageType.LEAVE,
-                        ]:
-                            print(f"*** {response.data.content} ***")
+                    if isinstance(response.data, list):
+                        # Handle fetched messages
+                        for msg in response.data:
+                            print(f"{msg.username}: {str(msg)}")
+                    else:
+                        # Handle single message
+                        print(f"{response.data.username}: {str(response.data)}")
 
-                        # Show unread count if provided
-                        if response.unread_count is not None:
-                            print(f"({response.unread_count} more unread messages)")
-
-            except (ConnectionError, OSError) as e:
-                if self.connected:  # Only print if we haven't initiated the disconnect
-                    print(f"Lost connection to server: {e}")
-                self.connected = False
-                self.message_queue.put(("quit", None))
-                break
             except Exception as e:
-                if self.connected:  # Only print if we haven't initiated the disconnect
+                if self.connected:
                     print(f"Error receiving message: {e}")
-                self.connected = False
-                self.message_queue.put(("quit", None))
                 break
+
+        self.disconnect()
 
     def disconnect(self):
         if not self.connected:

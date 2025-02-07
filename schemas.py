@@ -12,11 +12,22 @@ class MessageType(str, Enum):
     FETCH = "fetch"  # Request stored messages
     MARK_READ = "mark_read"  # Mark messages as read
     DELETE = "delete"  # Delete messages
+    LOGIN = "login"  # Login request
+    REGISTER = "register"  # Registration request
+    LOGOUT = "logout"  # Logout request
 
 
 class Status(str, Enum):
     SUCCESS = "success"
     ERROR = "error"
+
+
+class AuthMessage(BaseModel):
+    """Authentication message format"""
+
+    username: str
+    password: str  # Will be hashed before transmission
+    message_type: MessageType
 
 
 class ChatMessage(BaseModel):
@@ -30,6 +41,7 @@ class ChatMessage(BaseModel):
     message_ids: Optional[List[int]] = (
         None  # List of message IDs to mark as read or delete
     )
+    password: Optional[str] = None  # For authentication messages
     # None means broadcast to all (for CHAT type)
 
     def __str__(self) -> str:

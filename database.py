@@ -1,7 +1,8 @@
 import sqlite3
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from schemas import ChatMessage, MessageType
+import bcrypt
 
 
 class Database:
@@ -14,7 +15,18 @@ class Database:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
 
-            # Create messages table
+            # Create users table
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    username TEXT PRIMARY KEY,
+                    password_hash BLOB NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """
+            )
+
+            # Create messages table with foreign key constraints
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS messages (
@@ -25,7 +37,9 @@ class Database:
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                     message_type TEXT NOT NULL,
                     read_status BOOLEAN DEFAULT FALSE,
-                    delivered BOOLEAN DEFAULT FALSE
+                    delivered BOOLEAN DEFAULT FALSE,
+                    FOREIGN KEY (sender) REFERENCES users(username),
+                    FOREIGN KEY (recipient) REFERENCES users(username)
                 )
             """
             )
@@ -45,6 +59,42 @@ class Database:
             )
 
             conn.commit()
+
+    def create_user(self, username: str, password: str) -> bool:
+        """Create a new user. Returns True if successful, False if username exists"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                # Hash the password with bcrypt
+                password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt())
+                cursor.execute(
+                    "INSERT INTO users (username, password_hash) VALUES (?, ?)",
+                    (username, password_hash),
+                )
+                conn.commit()
+                return True
+        except sqlite3.IntegrityError:
+            return False  # Username already exists
+
+    def verify_user(self, username: str, password: str) -> bool:
+        """Verify user credentials. Returns True if valid."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT password_hash FROM users WHERE username = ?", (username,)
+            )
+            result = cursor.fetchone()
+            if not result:
+                return False
+            stored_hash = result[0]
+            return bcrypt.checkpw(password.encode(), stored_hash)
+
+    def user_exists(self, username: str) -> bool:
+        """Check if a user exists"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM users WHERE username = ?", (username,))
+            return cursor.fetchone() is not None
 
     def store_message(self, message: ChatMessage) -> int:
         """Store a message and return its ID"""
