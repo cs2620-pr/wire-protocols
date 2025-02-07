@@ -4,6 +4,40 @@
 
 ## 02/07
 
+### Update 4
+
+Added message deletion functionality:
+
+1. Message Identification:
+   - Added visible message IDs to all messages
+   - Updated message display to show IDs in format: [id] message
+   - IDs are preserved across sessions via SQLite storage
+
+2. Deletion Implementation:
+   - New DELETE message type for deletion requests
+   - Added `/delete id [id ...]` command to delete multiple messages
+   - Messages can be deleted by either sender or recipient
+   - Deletion is permanent and immediate
+
+3. Security Considerations:
+   - Users can only delete messages they sent or received
+   - Database validates ownership before deletion
+   - Server notifies user of successful deletion count
+
+4. User Experience:
+   - Clear command syntax with helpful usage messages
+   - Immediate feedback on deletion success
+   - Error handling for invalid message IDs
+   - System notifications for deletion confirmation
+
+5. Design Decisions:
+   - Chose to show message IDs inline for easy reference
+   - Allowed batch deletion for efficiency
+   - Made deletion permanent (no soft delete) for simplicity
+   - Limited deletion to participants only
+
+The system now provides complete message lifecycle management: creation, delivery, reading, and deletion.
+
 ### Update 3
 
 Fixed message delivery and read status tracking:

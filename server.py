@@ -114,6 +114,21 @@ class ChatServer:
         if message.message_ids:
             self.db.mark_read(message.message_ids, message.username)
 
+    def handle_delete_messages(self, message: ChatMessage) -> None:
+        """Handle request to delete messages"""
+        if message.message_ids:
+            deleted_count = self.db.delete_messages(
+                message.message_ids, message.username
+            )
+            # Notify user of deletion
+            notification = ChatMessage(
+                username="System",
+                content=f"Deleted {deleted_count} message(s)",
+                message_type=MessageType.CHAT,
+            )
+            if message.username in self.usernames:
+                self.send_to_client(self.usernames[message.username], notification)
+
     def send_to_recipients(self, message: ChatMessage, exclude_socket=None):
         """Send message to specific recipients or broadcast if no recipients specified"""
         if message.message_type == MessageType.DM:
@@ -216,6 +231,8 @@ class ChatServer:
                         self.handle_fetch_request(message, client_socket)
                     elif message.message_type == MessageType.MARK_READ:
                         self.handle_mark_read(message)
+                    elif message.message_type == MessageType.DELETE:
+                        self.handle_delete_messages(message)
                     elif message.message_type == MessageType.DM:
                         if not message.recipients:
                             continue

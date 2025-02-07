@@ -148,3 +148,20 @@ class Database:
                 (recipient,),
             )
             return cursor.fetchone()[0]
+
+    def delete_messages(self, message_ids: List[int], username: str) -> int:
+        """Delete messages for a user (must be sender or recipient)
+        Returns number of messages deleted"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                DELETE FROM messages 
+                WHERE id IN ({}) AND (sender = ? OR recipient = ?)
+            """.format(
+                    ",".join("?" * len(message_ids))
+                ),
+                (*message_ids, username, username),
+            )
+            conn.commit()
+            return cursor.rowcount

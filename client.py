@@ -60,6 +60,7 @@ class ChatClient:
         print("  username;message - Send DM to user")
         print("  /fetch [n]      - Fetch n unread messages (default 10)")
         print("  /read           - Mark displayed messages as read")
+        print("  /delete id [id] - Delete messages by ID")
         print("  /quit           - Exit the chat")
 
         while self.connected:
@@ -90,10 +91,20 @@ class ChatClient:
                 print("Invalid count. Usage: /fetch [n]")
         elif cmd == "read":
             self.mark_messages_read()
+        elif cmd == "delete":
+            try:
+                message_ids = [int(id) for id in parts[1:]]
+                if not message_ids:
+                    print("Usage: /delete message_id [message_id ...]")
+                    return
+                self.delete_messages(message_ids)
+            except ValueError:
+                print("Invalid message ID. Usage: /delete message_id [message_id ...]")
         else:
             print("Unknown command. Available commands:")
             print("  /fetch [n] - Fetch n unread messages")
             print("  /read      - Mark displayed messages as read")
+            print("  /delete id [id] - Delete messages by ID")
             print("  /quit      - Exit the chat")
 
     def fetch_messages(self, count: int = 10):
@@ -121,6 +132,17 @@ class ChatClient:
         if self.send_message(mark_read_message):
             self.unread_messages.clear()
             print("Messages marked as read")
+
+    def delete_messages(self, message_ids: List[int]):
+        """Delete specified messages"""
+        delete_message = ChatMessage(
+            username=self.username,
+            content="",
+            message_type=MessageType.DELETE,
+            message_ids=message_ids,
+        )
+        if self.send_message(delete_message):
+            print("Delete request sent")
 
     def send_message(self, message: ChatMessage) -> bool:
         if not self.connected:
@@ -196,15 +218,13 @@ class ChatClient:
 
                         # Handle different message types
                         if response.data.message_type == MessageType.CHAT:
-                            print(f"{response.data.username}: {response.data.content}")
+                            print(f"{response.data.username}: {str(response.data)}")
                         elif response.data.message_type == MessageType.DM:
                             if response.data.username == self.username:
-                                print(
-                                    f"To {response.data.recipients[0]}: {response.data.content}"
-                                )
+                                print(str(response.data))
                             else:
                                 print(
-                                    f"From {response.data.username}: {response.data.content}"
+                                    f"From {response.data.username}: {str(response.data)}"
                                 )
                         elif response.data.message_type in [
                             MessageType.JOIN,
