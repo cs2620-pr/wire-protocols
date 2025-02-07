@@ -4,11 +4,18 @@ import time
 import sys
 from queue import Queue, Empty
 from typing import Tuple, Optional
-from schemas import ChatMessage, MessageType, ServerResponse
+from schemas import ChatMessage, MessageType, ServerResponse, Status
+from protocol import Protocol, ProtocolFactory
 
 
 class ChatClient:
-    def __init__(self, username: str, host: str = "localhost", port: int = 8000):
+    def __init__(
+        self,
+        username: str,
+        protocol: Optional[Protocol] = None,
+        host: str = "localhost",
+        port: int = 8000,
+    ):
         self.username = username
         self.host = host
         self.port = port
@@ -17,6 +24,10 @@ class ChatClient:
         self._lock = threading.Lock()
         self.message_queue: Queue[Tuple[str, Optional[str]]] = Queue()
         self.input_thread = None
+        self.protocol = protocol or ProtocolFactory.create(
+            "json"
+        )  # Default to JSON if not specified
+        self.receive_buffer = b""
 
     def connect(self):
         try:
@@ -45,6 +56,10 @@ class ChatClient:
             return False
 
     def handle_input(self):
+        print("Type your message ('quit' to exit)")
+        print("For DMs use: username;your message")
+        print("For group chat just type your message")
+
         while self.connected:
             try:
                 message = input()
@@ -56,13 +71,15 @@ class ChatClient:
                 self.message_queue.put(("quit", None))
                 break
 
-    def send_message(self, message: ChatMessage):
+    def send_message(self, message: ChatMessage) -> bool:
         if not self.connected:
             return False
 
         try:
             with self._lock:
-                self.client_socket.send(message.model_dump_json().encode() + b"\n")
+                data = self.protocol.serialize_message(message)
+                framed_data = self.protocol.frame_message(data)
+                self.client_socket.send(framed_data)
                 return True
         except Exception as e:
             print(f"Error sending message: {e}")
@@ -70,29 +87,75 @@ class ChatClient:
             return False
 
     def send_chat_message(self, content: str):
-        message = ChatMessage(username=self.username, content=content)
+        # Check if this is a DM (contains semicolon)
+        if ";" in content:
+            recipient, message_content = content.split(";", 1)
+            recipient = recipient.strip()
+            message_content = message_content.strip()
+
+            if not recipient or not message_content:
+                print("Invalid format. Use: username;message")
+                return True  # Return True to keep the client running
+
+            message = ChatMessage(
+                username=self.username,
+                content=message_content,
+                message_type=MessageType.DM,
+                recipients=[recipient],
+            )
+        else:
+            # Regular chat message
+            message = ChatMessage(
+                username=self.username, content=content, message_type=MessageType.CHAT
+            )
+
         return self.send_message(message)
 
     def receive_messages(self):
         while self.connected:
             try:
-                data = self.client_socket.recv(1024).decode().strip()
+                data = self.client_socket.recv(1024)
                 if not data:
                     print("Lost connection to server")
                     self.connected = False
                     self.message_queue.put(("quit", None))
                     break
 
-                response = ServerResponse.model_validate_json(data)
-                if response.data:
-                    # Handle different message types
-                    if response.data.message_type == MessageType.CHAT:
-                        print(f"{response.data.username}: {response.data.content}")
-                    elif response.data.message_type in [
-                        MessageType.JOIN,
-                        MessageType.LEAVE,
-                    ]:
-                        print(f"*** {response.data.content} ***")
+                self.receive_buffer += data
+                while True:
+                    message_data, self.receive_buffer = self.protocol.extract_message(
+                        self.receive_buffer
+                    )
+                    if message_data is None:
+                        break
+
+                    response = self.protocol.deserialize_response(message_data)
+
+                    if response.status == Status.ERROR:
+                        print(f"Error: {response.message}")
+                        if response.message == "Username already taken":
+                            self.connected = False
+                            self.message_queue.put(("quit", None))
+                            break
+
+                    if response.data:
+                        # Handle different message types
+                        if response.data.message_type == MessageType.CHAT:
+                            print(f"{response.data.username}: {response.data.content}")
+                        elif response.data.message_type == MessageType.DM:
+                            if response.data.username == self.username:
+                                print(
+                                    f"To {response.data.recipients[0]}: {response.data.content}"
+                                )
+                            else:
+                                print(
+                                    f"From {response.data.username}: {response.data.content}"
+                                )
+                        elif response.data.message_type in [
+                            MessageType.JOIN,
+                            MessageType.LEAVE,
+                        ]:
+                            print(f"*** {response.data.content} ***")
 
             except (ConnectionError, OSError) as e:
                 if self.connected:  # Only print if we haven't initiated the disconnect
@@ -122,7 +185,9 @@ class ChatClient:
                 message_type=MessageType.LEAVE,
             )
             # Send without using send_message to avoid the lock
-            self.client_socket.send(leave_message.model_dump_json().encode() + b"\n")
+            data = self.protocol.serialize_message(leave_message)
+            framed_data = self.protocol.frame_message(data)
+            self.client_socket.send(framed_data)
             time.sleep(0.1)  # Give the server a moment to process
         except Exception:
             pass  # Ignore any errors during disconnect
@@ -139,7 +204,7 @@ class ChatClient:
             print("Failed to connect to server")
             return
 
-        print("Connected to server! Type your messages (or 'quit' to exit)")
+        print("Connected to server!")
 
         try:
             while self.connected:
@@ -168,7 +233,9 @@ if __name__ == "__main__":
         sys.exit(1)
 
     username = sys.argv[1]
-    client = ChatClient(username)
+    # Can specify protocol type: "json" or "custom"
+    protocol = ProtocolFactory.create("json")
+    client = ChatClient(username, protocol=protocol)
     try:
         client.run()
     except KeyboardInterrupt:
