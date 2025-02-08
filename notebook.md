@@ -2,6 +2,44 @@
 
 **Pranav Ramesh, Mohammmed Zidan Cassim**
 
+## 02/08
+
+### Update 7
+
+Enhanced the GUI client's user experience and fixed user status synchronization:
+
+1. User Interface Improvements:
+   - Added username display in window title bar (e.g., "Chat Client - Alice")
+   - Title bar updates dynamically on login/logout
+   - Provides clear visual indication of which account is active
+   - Helpful for users running multiple chat windows
+
+2. User Status Synchronization:
+   - Fixed issue where user statuses weren't properly synchronized
+   - Improved active user list management in the GUI
+   - Maintains accurate active/inactive status across all clients
+   - Properly handles JOIN/LEAVE message updates
+
+3. Design Decisions:
+   - Used window title for username display to avoid cluttering the main interface
+   - Implemented proper state management for user status tracking
+   - Maintained existing active users when new users join
+   - Ensured consistent status display across all connected clients
+
+4. Technical Implementation:
+   - Enhanced `handle_server_message` to properly track active users
+   - Added current user status preservation during updates
+   - Improved user list synchronization logic
+   - Clean title bar management during login/logout cycles
+
+5. User Experience Benefits:
+   - Clear indication of current logged-in user
+   - Accurate representation of all users' statuses
+   - Consistent behavior across multiple client windows
+   - Improved overall usability and user feedback
+
+These changes have made the chat client more user-friendly and reliable, particularly when multiple users are active simultaneously.
+
 ## 02/07
 
 ### Update 6

@@ -80,7 +80,7 @@ class LoginDialog(QDialog):
 
 
 class ReceiveThread(QThread):
-    message_received = pyqtSignal(str)
+    message_received = pyqtSignal(str, object)  # Signal now includes the message object
     connection_lost = pyqtSignal()
 
     def __init__(self, client):
@@ -92,7 +92,7 @@ class ReceiveThread(QThread):
             try:
                 data = self.client.client_socket.recv(1024)
                 if not data:
-                    self.message_received.emit("Connection closed by server")
+                    self.message_received.emit("Connection closed by server", None)
                     self.connection_lost.emit()
                     break
 
@@ -106,27 +106,30 @@ class ReceiveThread(QThread):
 
                     response = self.client.protocol.deserialize_response(message_data)
                     if response.status == Status.ERROR:
-                        self.message_received.emit(f"Error: {response.message}")
+                        self.message_received.emit(f"Error: {response.message}", None)
                         if "not logged in" in response.message.lower():
                             self.connection_lost.emit()
                             break
                         continue
 
                     if response.data is None:
-                        self.message_received.emit(response.message)
+                        self.message_received.emit(response.message, None)
                         continue
 
                     if isinstance(response.data, list):
                         for msg in response.data:
-                            self.message_received.emit(f"{msg.username}: {str(msg)}")
+                            self.message_received.emit(
+                                f"{msg.username}: {str(msg)}", msg
+                            )
                     else:
                         self.message_received.emit(
-                            f"{response.data.username}: {str(response.data)}"
+                            f"{response.data.username}: {str(response.data)}",
+                            response.data,
                         )
 
             except Exception as e:
                 if self.client.connected:
-                    self.message_received.emit(f"Error receiving message: {e}")
+                    self.message_received.emit(f"Error receiving message: {e}", None)
                 break
 
         self.connection_lost.emit()
@@ -141,17 +144,20 @@ class ChatWindow(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle("Chat Client")
-        self.setGeometry(100, 100, 800, 600)
+        self.setGeometry(100, 100, 1000, 600)  # Made window wider for user list
 
         # Create central widget and layout
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        layout = QVBoxLayout(central_widget)
+        main_layout = QHBoxLayout(central_widget)
+
+        # Chat area layout
+        chat_layout = QVBoxLayout()
 
         # Chat display area
         self.chat_display = QTextEdit()
         self.chat_display.setReadOnly(True)
-        layout.addWidget(self.chat_display)
+        chat_layout.addWidget(self.chat_display)
 
         # Message input area
         input_layout = QHBoxLayout()
@@ -161,7 +167,7 @@ class ChatWindow(QMainWindow):
         self.send_button.clicked.connect(self.send_message)
         input_layout.addWidget(self.message_input)
         input_layout.addWidget(self.send_button)
-        layout.addLayout(input_layout)
+        chat_layout.addLayout(input_layout)
 
         # Buttons layout
         button_layout = QHBoxLayout()
@@ -189,7 +195,19 @@ class ChatWindow(QMainWindow):
         button_layout.addWidget(self.delete_button)
         button_layout.addWidget(self.logout_button)
 
-        layout.addLayout(button_layout)
+        chat_layout.addLayout(button_layout)
+        main_layout.addLayout(chat_layout, stretch=7)  # Chat area takes 70% of width
+
+        # User list area (right side)
+        user_list_layout = QVBoxLayout()
+        user_list_layout.addWidget(QLabel("Users:"))
+        self.user_list = QTextEdit()
+        self.user_list.setReadOnly(True)
+        self.user_list.setMaximumWidth(200)  # Limit width of user list
+        user_list_layout.addWidget(self.user_list)
+        main_layout.addLayout(
+            user_list_layout, stretch=3
+        )  # User list takes 30% of width
 
         # Initially disable UI elements until connected
         self.set_ui_enabled(False)
@@ -206,6 +224,7 @@ class ChatWindow(QMainWindow):
         self.delete_button.setEnabled(enabled)
         self.logout_button.setEnabled(enabled)
         self.fetch_count.setEnabled(enabled)
+        self.user_list.setEnabled(enabled)
 
     def show_login_dialog(self):
         dialog = LoginDialog(self)
@@ -241,13 +260,16 @@ class ChatWindow(QMainWindow):
 
         # Start receive thread
         self.receive_thread = ReceiveThread(self.client)
-        self.receive_thread.message_received.connect(self.display_message)
+        self.receive_thread.message_received.connect(self.handle_message)
         self.receive_thread.connection_lost.connect(self.handle_disconnection)
         self.receive_thread.start()
 
         # Enable UI elements
         self.set_ui_enabled(True)
         self.display_message("Connected to server!")
+
+        # Update window title to include username
+        self.setWindowTitle(f"Chat Client - {username}")
         return True
 
     def send_message(self):
@@ -309,6 +331,9 @@ class ChatWindow(QMainWindow):
         # Clear the chat display
         self.chat_display.clear()
 
+        # Reset window title
+        self.setWindowTitle("Chat Client")
+
         # Disable UI elements
         self.set_ui_enabled(False)
 
@@ -347,6 +372,80 @@ class ChatWindow(QMainWindow):
             self.client.disconnect()
         event.accept()
         QApplication.instance().quit()
+
+    def update_user_list(self, all_users: List[str], active_users: List[str]):
+        """Update the user list display"""
+        self.user_list.clear()
+        for user in sorted(set(all_users)):  # Use set to remove duplicates
+            status = "🟢" if user in active_users else "⚪"
+            self.user_list.append(f"{status} {user}")
+
+    def handle_server_message(self, message: ChatMessage):
+        """Handle server messages including user list updates"""
+        if (
+            message.message_type == MessageType.LOGIN
+            and message.recipients
+            and message.active_users
+        ):
+            # Update user list when receiving login success message
+            self.update_user_list(message.recipients, message.active_users)
+        elif message.message_type == MessageType.JOIN:
+            # For join messages, add the new user to the list if not present
+            current_all_users = [
+                text.split(" ", 1)[1]
+                for text in self.user_list.toPlainText().split("\n")
+                if text
+            ]
+            if message.username not in current_all_users:
+                current_all_users.append(message.username)
+
+            # Get current active users from the display
+            current_active_users = [
+                text.split(" ", 1)[1]
+                for text in self.user_list.toPlainText().split("\n")
+                if text and text.startswith("🟢")
+            ]
+
+            # Add the new user to active users
+            if message.username not in current_active_users:
+                current_active_users.append(message.username)
+
+            # Use server's active_users list if provided, otherwise use our current list
+            active_users = (
+                message.active_users if message.active_users else current_active_users
+            )
+            self.update_user_list(current_all_users, active_users)
+
+        elif message.message_type == MessageType.LEAVE:
+            # For leave messages, keep the user in the list but mark as inactive
+            current_all_users = [
+                text.split(" ", 1)[1]
+                for text in self.user_list.toPlainText().split("\n")
+                if text
+            ]
+            # Get current active users and remove the leaving user
+            current_active_users = [
+                text.split(" ", 1)[1]
+                for text in self.user_list.toPlainText().split("\n")
+                if text and text.startswith("🟢")
+            ]
+            if message.username in current_active_users:
+                current_active_users.remove(message.username)
+
+            # Use server's active_users list if provided, otherwise use our current list
+            active_users = (
+                message.active_users if message.active_users else current_active_users
+            )
+            self.update_user_list(current_all_users, active_users)
+
+    def handle_message(self, message: str, message_obj: Optional[ChatMessage] = None):
+        """Handle incoming messages and update UI accordingly"""
+        if message_obj:
+            self.handle_server_message(message_obj)
+            # Only display the message after handling server updates
+            self.chat_display.append(message)
+        else:
+            self.chat_display.append(message)
 
 
 class ChatClient:
