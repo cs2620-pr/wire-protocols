@@ -4,6 +4,43 @@
 
 ## 02/07
 
+### Update 6
+
+Migrated to a PyQt5-based GUI client:
+
+1. Architecture Changes:
+   - Separated network operations into NetworkManager class
+   - Implemented threaded message receiving with QThread
+   - Moved from CLI to event-driven GUI architecture
+   - Connection lifecycle now tied to window lifecycle
+
+2. User Interface:
+   - Two-window system: Login/Register and Main Chat
+   - Split-view chat interface with user list and chat area
+   - Real-time user status indicators (active/inactive)
+   - Message operations integrated into GUI (fetch, read, delete)
+   - Visual feedback for all operations
+
+3. Authentication Flow:
+   - Dedicated login/register window
+   - Connection established at window creation
+   - Proper session handling with GUI state updates
+   - Clean connection termination on window close
+
+4. Message Management:
+   - Visual message threading by conversation
+   - Integrated message deletion with UI updates
+   - Real-time updates for both participants
+   - Improved message status visibility
+
+5. Design Decisions:
+   - Qt signals/slots for thread-safe communication
+   - Separate network thread for responsive UI
+   - Connection management tied to window lifecycle
+   - Consistent visual feedback for all operations
+
+The system now provides a modern, user-friendly interface while maintaining all existing functionality.
+
 ### Update 5
 
 Added user authentication functionality:

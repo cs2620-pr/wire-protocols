@@ -8,18 +8,49 @@ class MessageType(str, Enum):
     JOIN = "join"
     LEAVE = "leave"
     CHAT = "chat"
-    DM = "dm"  # New type for direct messages
-    FETCH = "fetch"  # Request stored messages
-    MARK_READ = "mark_read"  # Mark messages as read
-    DELETE = "delete"  # Delete messages
-    LOGIN = "login"  # Login request
-    REGISTER = "register"  # Registration request
-    LOGOUT = "logout"  # Logout request
+    LOGIN = "login"
+    REGISTER = "register"
+    LOGOUT = "logout"
+    DM = "dm"
+    FETCH = "fetch"
+    MARK_READ = "mark_read"
+    DELETE = "delete"
 
 
 class Status(str, Enum):
     SUCCESS = "success"
     ERROR = "error"
+
+
+class SystemMessage(str, Enum):
+    # General messages
+    NEW_MESSAGE = "new_message"
+
+    # Authentication messages
+    LOGIN_REQUIRED = "Please login or register first"
+    USER_EXISTS = "Username already exists. Please login instead."
+    PASSWORD_REQUIRED = "Password is required"
+    REGISTRATION_SUCCESS = "Registration successful! Logging in..."
+    REGISTRATION_FAILED = "Registration failed"
+    INVALID_CREDENTIALS = "Invalid username or password"
+    USER_ALREADY_LOGGED_IN = "User already logged in"
+    LOGIN_SUCCESS = "Login successful"
+
+    # Connection messages
+    CONNECTION_LOST = "Lost connection to server. The application will now close."
+    CONNECTION_ERROR = (
+        "Could not connect to server. Please check if the server is running."
+    )
+
+    # Validation messages
+    EMPTY_CREDENTIALS = "Username and password are required"
+    INVALID_MESSAGE_IDS = "Invalid message IDs"
+
+    # Chat messages
+    USER_JOINED = "{} has joined the chat"
+    USER_LEFT = "{} has left the chat"
+    MESSAGES_DELETED = "Deleted {} message(s)"
+    UNREAD_MESSAGES = "You have {} unread messages. Use /fetch [n] to retrieve them."
 
 
 class AuthMessage(BaseModel):
@@ -42,6 +73,7 @@ class ChatMessage(BaseModel):
         None  # List of message IDs to mark as read or delete
     )
     password: Optional[str] = None  # For authentication messages
+    active_users: Optional[List[str]] = None  # List of currently active users
     # None means broadcast to all (for CHAT type)
 
     def __str__(self) -> str:

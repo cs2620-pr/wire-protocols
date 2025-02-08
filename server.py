@@ -2,7 +2,7 @@ import socket
 import threading
 import json
 from typing import Dict, List, Set, Optional
-from schemas import ChatMessage, ServerResponse, MessageType, Status
+from schemas import ChatMessage, ServerResponse, MessageType, Status, SystemMessage
 from protocol import Protocol, ProtocolFactory
 from database import Database
 
@@ -61,7 +61,7 @@ class ChatServer:
         try:
             response = ServerResponse(
                 status=Status.SUCCESS,
-                message="new_message",
+                message=SystemMessage.NEW_MESSAGE,
                 data=message,
                 unread_count=unread_count,
             )
@@ -123,7 +123,7 @@ class ChatServer:
             # Notify user of deletion
             notification = ChatMessage(
                 username="System",
-                content=f"Deleted {deleted_count} message(s)",
+                content=SystemMessage.MESSAGES_DELETED.format(deleted_count),
                 message_type=MessageType.CHAT,
             )
             if message.username in self.usernames:
@@ -194,7 +194,7 @@ class ChatServer:
                         ]:
                             error_response = ServerResponse(
                                 status=Status.ERROR,
-                                message="Please login or register first",
+                                message=SystemMessage.LOGIN_REQUIRED,
                                 data=None,
                             )
                             data = self.protocol.serialize_response(error_response)
@@ -206,7 +206,7 @@ class ChatServer:
                             if self.db.user_exists(message.username):
                                 error_response = ServerResponse(
                                     status=Status.ERROR,
-                                    message="Username already exists. Please login instead.",
+                                    message=SystemMessage.USER_EXISTS,
                                     data=None,
                                 )
                                 data = self.protocol.serialize_response(error_response)
@@ -217,7 +217,7 @@ class ChatServer:
                             if not message.password:
                                 error_response = ServerResponse(
                                     status=Status.ERROR,
-                                    message="Password is required",
+                                    message=SystemMessage.PASSWORD_REQUIRED,
                                     data=None,
                                 )
                                 data = self.protocol.serialize_response(error_response)
@@ -228,7 +228,7 @@ class ChatServer:
                             if self.db.create_user(message.username, message.password):
                                 success_response = ServerResponse(
                                     status=Status.SUCCESS,
-                                    message="Registration successful. Please login.",
+                                    message=SystemMessage.REGISTRATION_SUCCESS,
                                     data=None,
                                 )
                                 data = self.protocol.serialize_response(
@@ -240,7 +240,7 @@ class ChatServer:
                             else:
                                 error_response = ServerResponse(
                                     status=Status.ERROR,
-                                    message="Registration failed",
+                                    message=SystemMessage.REGISTRATION_FAILED,
                                     data=None,
                                 )
                                 data = self.protocol.serialize_response(error_response)
@@ -252,7 +252,7 @@ class ChatServer:
                             if not message.password:
                                 error_response = ServerResponse(
                                     status=Status.ERROR,
-                                    message="Password is required",
+                                    message=SystemMessage.PASSWORD_REQUIRED,
                                     data=None,
                                 )
                                 data = self.protocol.serialize_response(error_response)
@@ -265,7 +265,7 @@ class ChatServer:
                             ):
                                 error_response = ServerResponse(
                                     status=Status.ERROR,
-                                    message="Invalid username or password",
+                                    message=SystemMessage.INVALID_CREDENTIALS,
                                     data=None,
                                 )
                                 data = self.protocol.serialize_response(error_response)
@@ -277,7 +277,7 @@ class ChatServer:
                             if message.username in self.usernames:
                                 error_response = ServerResponse(
                                     status=Status.ERROR,
-                                    message="User already logged in",
+                                    message=SystemMessage.USER_ALREADY_LOGGED_IN,
                                     data=None,
                                 )
                                 data = self.protocol.serialize_response(error_response)
@@ -293,18 +293,38 @@ class ChatServer:
                             # Send join notification
                             join_message = ChatMessage(
                                 username=username,
-                                content=f"{username} has joined the chat",
+                                content=SystemMessage.USER_JOINED.format(username),
                                 message_type=MessageType.JOIN,
                             )
                             self.send_to_recipients(join_message)
                             print(f"Client {username} joined the chat")
+
+                            # Send success response with user list
+                            all_users = self.db.get_all_users()
+                            active_users = list(self.usernames.keys())
+                            success_response = ServerResponse(
+                                status=Status.SUCCESS,
+                                message=SystemMessage.LOGIN_SUCCESS,
+                                data=ChatMessage(
+                                    username="System",
+                                    content="",
+                                    message_type=MessageType.LOGIN,
+                                    recipients=all_users,  # All users
+                                    active_users=active_users,  # Active users
+                                ),
+                            )
+                            data = self.protocol.serialize_response(success_response)
+                            framed_data = self.protocol.frame_message(data)
+                            client_socket.send(framed_data)
 
                             # Check for unread messages
                             unread_count = self.db.get_unread_count(username)
                             if unread_count > 0:
                                 notification = ChatMessage(
                                     username="System",
-                                    content=f"You have {unread_count} unread messages. Use /fetch [n] to retrieve them.",
+                                    content=SystemMessage.UNREAD_MESSAGES.format(
+                                        unread_count
+                                    ),
                                     message_type=MessageType.CHAT,
                                 )
                                 self.send_to_client(client_socket, notification)
@@ -352,7 +372,7 @@ class ChatServer:
         if username and send_leave_message:
             leave_message = ChatMessage(
                 username=username,
-                content=f"{username} has left the chat",
+                content=SystemMessage.USER_LEFT.format(username),
                 message_type=MessageType.LEAVE,
             )
             self.send_to_recipients(leave_message, exclude_socket=client_socket)

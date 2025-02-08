@@ -215,3 +215,10 @@ class Database:
             )
             conn.commit()
             return cursor.rowcount
+
+    def get_all_users(self) -> List[str]:
+        """Get a list of all registered users"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT username FROM users")
+            return [row[0] for row in cursor.fetchall()]
