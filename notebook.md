@@ -2,9 +2,117 @@
 
 **Pranav Ramesh, Mohammmed Zidan Cassim**
 
+## 02/09
+
+### Update 1
+
+Fixed issues with unread message counts and message deletion functionality:
+
+1. Unread Count Issues:
+   - Problem: Unread count was always showing 0 and read_status was never being set to true
+   - Root Cause: Messages weren't being marked as read when viewed in chat window
+   - Solution:
+     * Added mark_read_message call in load_chat_history
+     * Implemented mark_read_from_user in database to mark all messages from a user as read
+     * Enhanced server's handle_mark_read to support both specific messages and all messages from a user
+     * Added proper unread count tracking and notification system
+
+2. Message Deletion Improvements:
+   - Problem: Users could accidentally delete messages from other conversations
+   - Changes Made:
+     * Modified delete_messages in database to require both sender and recipient
+     * Updated SQL queries to check both sender and recipient using AND conditions
+     * Enhanced client code to include current chat recipient in delete requests
+     * Improved server-side validation of message ownership
+   - Security Benefits:
+     * Messages can only be deleted from the specific conversation they belong to
+     * Both sender and recipient are verified before deletion
+     * Prevents accidental deletion across conversations
+
+3. Technical Challenges:
+   - Database Schema:
+     * Had to carefully modify SQL queries to maintain data integrity
+     * Needed to handle both sender->recipient and recipient->sender message patterns
+   - Concurrency:
+     * Ensuring thread-safe updates to unread counts
+     * Managing simultaneous delete operations
+   - State Management:
+     * Tracking unread counts across multiple chat windows
+     * Maintaining consistency between client and server state
+
+4. Implementation Details:
+   - Client Changes:
+     * Added mark_read_message in load_chat_history:
+       ```python
+       mark_read_message = ChatMessage(
+           username=self.client.username,
+           content="",
+           message_type=MessageType.MARK_READ,
+           recipients=[username],
+       )
+       ```
+     * Enhanced delete_messages to include recipient:
+       ```python
+       delete_message = ChatMessage(
+           username=self.username,
+           content="",
+           message_type=MessageType.DELETE,
+           message_ids=message_ids,
+           recipients=[recipient],
+       )
+       ```
+
+   - Server Changes:
+     * Added mark_read_from_user support:
+       ```python
+       def handle_mark_read(self, message: ChatMessage) -> None:
+           if message.recipients:
+               self.db.mark_read_from_user(message.username, message.recipients[0])
+           elif message.message_ids:
+               self.db.mark_read(message.message_ids, message.username)
+       ```
+     * Enhanced delete message handling:
+       ```python
+       def handle_delete_messages(self, message: ChatMessage) -> None:
+           if message.message_ids and message.recipients:
+               deleted_count, deleted_info = self.db.delete_messages(
+                   message.message_ids, message.username, message.recipients[0]
+               )
+       ```
+
+   - Database Changes:
+     * Modified delete_messages query:
+       ```sql
+       DELETE FROM messages 
+       WHERE id IN ({}) AND (
+           (sender = ? AND recipient = ?) OR
+           (sender = ? AND recipient = ?)
+       )
+       ```
+     * Added mark_read_from_user method:
+       ```sql
+       UPDATE messages 
+       SET read_status = TRUE 
+       WHERE sender = ? AND recipient = ? AND read_status = FALSE
+       ```
+
+5. User Experience Improvements:
+   - Real-time unread count updates in user list
+   - Clear visual feedback when messages are marked as read
+   - Proper error handling for invalid delete attempts
+   - Consistent behavior across multiple chat windows
+
+6. Remaining Considerations:
+   - Performance optimization for large message histories
+   - Potential for batch operations to reduce database load
+   - Additional error handling for edge cases
+   - Future enhancements to message status tracking
+
+These changes have significantly improved the reliability and security of the chat system, particularly in handling unread messages and message deletion.
+
 ## 02/08
 
-### Update 7
+### Update 1
 
 Enhanced the GUI client's user experience and fixed user status synchronization:
 

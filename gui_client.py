@@ -14,6 +14,8 @@ from PyQt5.QtWidgets import (
     QDialog,
     QSpinBox,
     QComboBox,
+    QListWidget,
+    QFrame,
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 import socket
@@ -157,14 +159,19 @@ class ChatWindow(QMainWindow):
         # Chat display area
         self.chat_display = QTextEdit()
         self.chat_display.setReadOnly(True)
+        # Set background and text color based on system theme
+        self.update_theme()
         chat_layout.addWidget(self.chat_display)
 
         # Message input area
         input_layout = QHBoxLayout()
         self.message_input = QLineEdit()
         self.message_input.returnPressed.connect(self.send_message)
+        self.message_input.setPlaceholderText("Select a user to start messaging")
+        self.message_input.setEnabled(False)  # Initially disabled
         self.send_button = QPushButton("Send")
         self.send_button.clicked.connect(self.send_message)
+        self.send_button.setEnabled(False)  # Initially disabled
         input_layout.addWidget(self.message_input)
         input_layout.addWidget(self.send_button)
         chat_layout.addLayout(input_layout)
@@ -172,26 +179,12 @@ class ChatWindow(QMainWindow):
         # Buttons layout
         button_layout = QHBoxLayout()
 
-        # Fetch messages button with count spinner
-        fetch_layout = QHBoxLayout()
-        self.fetch_count = QSpinBox()
-        self.fetch_count.setRange(1, 100)
-        self.fetch_count.setValue(10)
-        self.fetch_button = QPushButton("Fetch Messages")
-        self.fetch_button.clicked.connect(self.fetch_messages)
-        fetch_layout.addWidget(self.fetch_count)
-        fetch_layout.addWidget(self.fetch_button)
-        button_layout.addLayout(fetch_layout)
-
         # Other control buttons
-        self.mark_read_button = QPushButton("Mark as Read")
-        self.mark_read_button.clicked.connect(self.mark_messages_read)
         self.delete_button = QPushButton("Delete Messages")
         self.delete_button.clicked.connect(self.delete_messages)
         self.logout_button = QPushButton("Logout")
         self.logout_button.clicked.connect(self.logout)
 
-        button_layout.addWidget(self.mark_read_button)
         button_layout.addWidget(self.delete_button)
         button_layout.addWidget(self.logout_button)
 
@@ -200,14 +193,33 @@ class ChatWindow(QMainWindow):
 
         # User list area (right side)
         user_list_layout = QVBoxLayout()
-        user_list_layout.addWidget(QLabel("Users:"))
-        self.user_list = QTextEdit()
-        self.user_list.setReadOnly(True)
+
+        # Current user status
+        self.current_user_label = QLabel()
+        self.current_user_label.setStyleSheet("QLabel { font-weight: bold; }")
+        user_list_layout.addWidget(self.current_user_label)
+
+        # Separator line
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        user_list_layout.addWidget(separator)
+
+        user_list_layout.addWidget(QLabel("Other Users:"))
+        self.user_list = QListWidget()
         self.user_list.setMaximumWidth(200)  # Limit width of user list
+        self.user_list.itemClicked.connect(self.on_user_clicked)
         user_list_layout.addWidget(self.user_list)
         main_layout.addLayout(
             user_list_layout, stretch=3
         )  # User list takes 30% of width
+
+        # Store current chat user
+        self.current_chat_user = None
+        # Store unread message counts per user
+        self.unread_counts = {}
+        # Store active users
+        self.active_users = set()
 
         # Initially disable UI elements until connected
         self.set_ui_enabled(False)
@@ -219,11 +231,8 @@ class ChatWindow(QMainWindow):
         """Enable or disable UI elements based on connection status"""
         self.message_input.setEnabled(enabled)
         self.send_button.setEnabled(enabled)
-        self.fetch_button.setEnabled(enabled)
-        self.mark_read_button.setEnabled(enabled)
         self.delete_button.setEnabled(enabled)
         self.logout_button.setEnabled(enabled)
-        self.fetch_count.setEnabled(enabled)
         self.user_list.setEnabled(enabled)
 
     def show_login_dialog(self):
@@ -266,21 +275,93 @@ class ChatWindow(QMainWindow):
 
         # Enable UI elements
         self.set_ui_enabled(True)
-        self.display_message("Connected to server!")
+        # Display system message
+        html = """
+            <div style="text-align: center; margin: 10px 0;">
+                <span style="color: #888888; font-style: italic;">
+                    Connected to server!
+                </span>
+            </div>
+        """
+        self.chat_display.append(html)
 
         # Update window title to include username
         self.setWindowTitle(f"Chat Client - {username}")
+
+        # Fetch unread messages to update unread counts
+        fetch_message = ChatMessage(
+            username=self.client.username,
+            content="",
+            message_type=MessageType.FETCH,
+            fetch_count=50,  # Fetch last 50 messages to get unread counts
+        )
+        self.client.send_message(fetch_message)
+
         return True
 
+    def update_theme(self):
+        """Update the chat display theme based on system colors"""
+        palette = self.palette()
+        is_dark = palette.color(palette.Window).lightness() < 128
+
+        # Set background color based on system theme
+        bg_color = "#2D2D2D" if is_dark else "#FFFFFF"
+        text_color = "#FFFFFF" if is_dark else "#000000"
+
+        # Apply theme to chat display
+        self.chat_display.setStyleSheet(
+            f"""
+            QTextEdit {{
+                background-color: {bg_color};
+                color: {text_color};
+                border: none;
+            }}
+        """
+        )
+
+    def display_message(self, sender: str, content: str, msg_id: Optional[str] = None):
+        """Display a message with colored sender name followed by content"""
+        is_from_me = sender == self.client.username
+        palette = self.palette()
+        is_dark = palette.color(palette.Window).lightness() < 128
+
+        # Set colors based on dark/light mode
+        my_color = "#0B93F6"  # Blue for my messages
+        other_color = "#E5E5EA" if not is_dark else "#808080"  # Grey for other messages
+        id_color = "#888888"  # Gray for message ID
+
+        # Create the name display
+        name_text = "me" if is_from_me else sender
+        name_color = my_color if is_from_me else other_color
+
+        # Create HTML for the message
+        html = f"""
+            <div style="margin: 4px 20px; font-size: 14px; display: flex; align-items: center;">
+                <span style="color: {id_color}; font-size: 10px; min-width: 40px; margin-right: 8px;">{msg_id if msg_id else ''}</span>
+                <div>
+                    <span style="color: {name_color}; font-weight: bold;">{name_text}:</span>
+                    <span style="margin-left: 8px;">{content}</span>
+                </div>
+            </div>
+        """
+
+        # Append the HTML to the chat display
+        self.chat_display.append(html)
+
     def send_message(self):
-        if not self.client or not self.client.connected:
+        if not self.client or not self.client.connected or not self.current_chat_user:
             return
 
         message = self.message_input.text().strip()
         if not message:
             return
 
-        if not self.client.send_chat_message(message):
+        # Always send as DM when in a chat
+        dm_content = f"{self.current_chat_user};{message}"
+        if self.client.send_chat_message(dm_content):
+            # Message will be displayed when we receive it back from the server with the message ID
+            pass
+        else:
             self.handle_disconnection()
 
         self.message_input.clear()
@@ -299,7 +380,8 @@ class ChatWindow(QMainWindow):
         self.client.mark_messages_read()
 
     def delete_messages(self):
-        if not self.client or not self.client.connected:
+        if not self.client or not self.client.connected or not self.current_chat_user:
+            QMessageBox.warning(self, "Error", "Please select a chat first")
             return
 
         message_ids_text, ok = QInputDialog.getText(
@@ -309,7 +391,10 @@ class ChatWindow(QMainWindow):
         if ok and message_ids_text:
             try:
                 message_ids = [int(id) for id in message_ids_text.split()]
-                self.client.delete_messages(message_ids)
+                self.client.delete_messages(message_ids, self.current_chat_user)
+                # Immediately refresh our own chat
+                self.chat_display.clear()
+                self.load_chat_history(self.current_chat_user)
             except ValueError:
                 QMessageBox.warning(self, "Error", SystemMessage.INVALID_MESSAGE_IDS)
 
@@ -328,14 +413,21 @@ class ChatWindow(QMainWindow):
             self.receive_thread.quit()
             self.receive_thread.wait()
 
-        # Clear the chat display
+        # Clear all state
         self.chat_display.clear()
+        self.current_chat_user = None
+        self.unread_counts.clear()
+        self.active_users.clear()
+        self.message_input.setPlaceholderText("Select a user to start messaging")
+        self.message_input.clear()
 
         # Reset window title
         self.setWindowTitle("Chat Client")
 
         # Disable UI elements
         self.set_ui_enabled(False)
+        self.message_input.setEnabled(False)
+        self.send_button.setEnabled(False)
 
         # Hide the main window
         self.hide()
@@ -345,9 +437,6 @@ class ChatWindow(QMainWindow):
 
         # Show the main window again after login
         self.show()
-
-    def display_message(self, message: str):
-        self.chat_display.append(message)
 
     def handle_disconnection(self):
         # If this is a voluntary disconnect (logout), don't do anything
@@ -376,9 +465,23 @@ class ChatWindow(QMainWindow):
     def update_user_list(self, all_users: List[str], active_users: List[str]):
         """Update the user list display"""
         self.user_list.clear()
-        for user in sorted(set(all_users)):  # Use set to remove duplicates
+        self.active_users = set(active_users)  # Update active users set
+
+        # Update current user status
+        self.current_user_label.setText(f"🟢 You ({self.client.username})")
+
+        # Filter out current user from the lists
+        other_users = [
+            user for user in sorted(set(all_users)) if user != self.client.username
+        ]
+
+        # Add other users to the list
+        for user in other_users:
             status = "🟢" if user in active_users else "⚪"
-            self.user_list.append(f"{status} {user}")
+            text = f"{status} {user}"
+            if user in self.unread_counts and self.unread_counts[user] > 0:
+                text = f"{text} ({self.unread_counts[user]})"
+            self.user_list.addItem(text)
 
     def handle_server_message(self, message: ChatMessage):
         """Handle server messages including user list updates"""
@@ -391,20 +494,26 @@ class ChatWindow(QMainWindow):
             self.update_user_list(message.recipients, message.active_users)
         elif message.message_type == MessageType.JOIN:
             # For join messages, add the new user to the list if not present
-            current_all_users = [
-                text.split(" ", 1)[1]
-                for text in self.user_list.toPlainText().split("\n")
-                if text
-            ]
+            current_all_users = []
+            for i in range(self.user_list.count()):
+                item = self.user_list.item(i)
+                username = (
+                    item.text().split(" ", 1)[1].split(" (")[0]
+                )  # Remove status emoji and unread count
+                current_all_users.append(username)
+
             if message.username not in current_all_users:
                 current_all_users.append(message.username)
 
             # Get current active users from the display
-            current_active_users = [
-                text.split(" ", 1)[1]
-                for text in self.user_list.toPlainText().split("\n")
-                if text and text.startswith("🟢")
-            ]
+            current_active_users = []
+            for i in range(self.user_list.count()):
+                item = self.user_list.item(i)
+                if item.text().startswith("🟢"):
+                    username = (
+                        item.text().split(" ", 1)[1].split(" (")[0]
+                    )  # Remove status emoji and unread count
+                    current_active_users.append(username)
 
             # Add the new user to active users
             if message.username not in current_active_users:
@@ -418,19 +527,24 @@ class ChatWindow(QMainWindow):
 
         elif message.message_type == MessageType.LEAVE:
             # For leave messages, keep the user in the list but mark as inactive
-            current_all_users = [
-                text.split(" ", 1)[1]
-                for text in self.user_list.toPlainText().split("\n")
-                if text
-            ]
+            current_all_users = []
+            for i in range(self.user_list.count()):
+                item = self.user_list.item(i)
+                username = (
+                    item.text().split(" ", 1)[1].split(" (")[0]
+                )  # Remove status emoji and unread count
+                current_all_users.append(username)
+
             # Get current active users and remove the leaving user
-            current_active_users = [
-                text.split(" ", 1)[1]
-                for text in self.user_list.toPlainText().split("\n")
-                if text and text.startswith("🟢")
-            ]
-            if message.username in current_active_users:
-                current_active_users.remove(message.username)
+            current_active_users = []
+            for i in range(self.user_list.count()):
+                item = self.user_list.item(i)
+                if item.text().startswith("🟢"):
+                    username = (
+                        item.text().split(" ", 1)[1].split(" (")[0]
+                    )  # Remove status emoji and unread count
+                    if username != message.username:  # Don't include the leaving user
+                        current_active_users.append(username)
 
             # Use server's active_users list if provided, otherwise use our current list
             active_users = (
@@ -438,14 +552,172 @@ class ChatWindow(QMainWindow):
             )
             self.update_user_list(current_all_users, active_users)
 
+    def on_user_clicked(self, item):
+        """Handle user selection from the list"""
+        # Extract username from the list item text (remove status emoji and unread count)
+        username = item.text().split(" ", 1)[1].split(" (")[0]
+
+        if username == self.current_chat_user:
+            return  # Already chatting with this user
+
+        self.current_chat_user = username
+        self.message_input.setEnabled(True)
+        self.send_button.setEnabled(True)
+        self.message_input.setPlaceholderText(f"Message {username}")
+
+        # Clear chat display and show relevant messages
+        self.chat_display.clear()
+        self.load_chat_history(username)
+
+        # Update unread count
+        if username in self.unread_counts:
+            self.unread_counts[username] = 0
+            self.update_user_list_item(username)
+
+    def load_chat_history(self, username: str):
+        """Load chat history for a specific user"""
+        # Request all messages between the current user and the selected user
+        history_message = ChatMessage(
+            username=self.client.username,
+            content="",
+            message_type=MessageType.FETCH,
+            recipients=[
+                username,
+                self.client.username,
+            ],  # Get messages between both users
+            fetch_count=50,  # Get last 50 messages
+        )
+        self.client.send_message(history_message)
+
+        # Mark all messages from this user as read
+        mark_read_message = ChatMessage(
+            username=self.client.username,
+            content="",
+            message_type=MessageType.MARK_READ,
+            recipients=[username],  # The user whose messages we're marking as read
+        )
+        self.client.send_message(mark_read_message)
+
+    def update_user_list_item(self, username: str):
+        """Update the display of a user in the list"""
+        for i in range(self.user_list.count()):
+            item = self.user_list.item(i)
+            if username in item.text():
+                status = "🟢" if username in self.active_users else "⚪"
+                unread = self.unread_counts.get(username, 0)
+                text = f"{status} {username}"
+                if unread > 0:
+                    text = f"{text} ({unread})"
+                item.setText(text)
+                break
+
     def handle_message(self, message: str, message_obj: Optional[ChatMessage] = None):
         """Handle incoming messages and update UI accordingly"""
         if message_obj:
             self.handle_server_message(message_obj)
-            # Only display the message after handling server updates
-            self.chat_display.append(message)
-        else:
-            self.chat_display.append(message)
+
+            # Handle message deletion notifications
+            if message_obj.message_type == MessageType.DELETE_NOTIFICATION:
+                # Update unread count if needed
+                if message_obj.unread_count and message_obj.unread_count > 0:
+                    # If we're the recipient of the deleted messages, update our unread count
+                    # for the conversation with the user who deleted them
+                    if (
+                        self.client.username != message_obj.username
+                    ):  # We're not the deleter
+                        current_unread = self.unread_counts.get(message_obj.username, 0)
+                        self.unread_counts[message_obj.username] = max(
+                            0, current_unread - message_obj.unread_count
+                        )
+                        self.update_user_list_item(message_obj.username)
+
+                # Refresh chat if we're viewing a conversation with the user who deleted messages
+                # or if we're viewing our own messages that were deleted
+                if self.current_chat_user and (
+                    message_obj.username == self.current_chat_user
+                    or self.current_chat_user == self.client.username
+                ):
+                    self.chat_display.clear()
+                    self.load_chat_history(self.current_chat_user)
+                return
+
+            # Handle unread messages and display
+            if message_obj.message_type in [MessageType.CHAT, MessageType.DM]:
+                sender = message_obj.username
+                is_from_current_chat = sender == self.current_chat_user
+                is_to_current_chat = (
+                    message_obj.recipients
+                    and self.current_chat_user in message_obj.recipients
+                )
+                is_from_me = sender == self.client.username
+                is_to_me = (
+                    message_obj.recipients
+                    and self.client.username in message_obj.recipients
+                )
+
+                # Update unread count if message is not from current chat or me
+                if not is_from_current_chat and not is_from_me and is_to_me:
+                    self.unread_counts[sender] = self.unread_counts.get(sender, 0) + 1
+                    self.update_user_list_item(sender)
+
+                # Display message if it's relevant to current chat
+                should_display = (
+                    (is_from_current_chat and is_to_me)
+                    or (is_from_me and is_to_current_chat)
+                    or (is_from_current_chat and not message_obj.recipients)
+                    or (
+                        is_from_me
+                        and not message_obj.recipients
+                        and self.current_chat_user
+                    )
+                    or message_obj.message_type == MessageType.FETCH
+                )
+
+                if should_display:
+                    msg_id = (
+                        f"[{message_obj.message_id}]"
+                        if message_obj.message_id is not None
+                        else None
+                    )
+                    self.display_message(sender, message_obj.content, msg_id)
+
+                # If this is a fetched message and it's unread, update the unread count
+                if (
+                    message_obj.message_type == MessageType.FETCH
+                    and is_to_me
+                    and not is_from_me
+                    and not is_from_current_chat  # Don't count messages from current chat
+                ):
+                    self.unread_counts[sender] = self.unread_counts.get(sender, 0) + 1
+                    self.update_user_list_item(sender)
+
+                # If we received an unread count update from the server, use it
+                if message_obj.unread_count is not None and is_to_me:
+                    if sender in self.unread_counts:
+                        self.unread_counts[sender] = message_obj.unread_count
+                        self.update_user_list_item(sender)
+
+            elif message_obj.message_type not in [MessageType.JOIN, MessageType.LEAVE]:
+                # Display system messages except JOIN/LEAVE messages
+                html = f"""
+                    <div style="text-align: center; margin: 10px 0;">
+                        <span style="color: #888888; font-style: italic;">
+                            {message}
+                        </span>
+                    </div>
+                """
+                self.chat_display.append(html)
+
+        elif message != "Connection closed by server":  # Skip connection closed message
+            # Display other system messages
+            html = f"""
+                <div style="text-align: center; margin: 10px 0;">
+                    <span style="color: #888888; font-style: italic;">
+                        {message}
+                    </span>
+                </div>
+            """
+            self.chat_display.append(html)
 
 
 class ChatClient:
@@ -582,12 +854,13 @@ class ChatClient:
         if self.send_message(mark_read_message):
             self.unread_messages.clear()
 
-    def delete_messages(self, message_ids: List[int]):
+    def delete_messages(self, message_ids: List[int], recipient: str):
         delete_message = ChatMessage(
             username=self.username,
             content="",
             message_type=MessageType.DELETE,
             message_ids=message_ids,
+            recipients=[recipient],
         )
         self.send_message(delete_message)
 

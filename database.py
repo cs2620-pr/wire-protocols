@@ -132,7 +132,7 @@ class Database:
             query = """
                 SELECT id, sender, recipient, content, timestamp, message_type
                 FROM messages
-                WHERE recipient = ? AND read_status = FALSE AND delivered = FALSE
+                WHERE recipient = ? AND read_status = FALSE
                 ORDER BY timestamp ASC
             """
             if limit:
@@ -169,21 +169,33 @@ class Database:
             )
             conn.commit()
 
-    def mark_read(self, message_ids: List[int], recipient: str):
-        """Mark messages as read for a recipient"""
+    def mark_read(self, message_ids: List[int], username: str) -> None:
+        """Mark messages as read for a specific user"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                UPDATE messages
-                SET read_status = TRUE
+                UPDATE messages 
+                SET read_status = TRUE 
                 WHERE id IN ({}) AND recipient = ?
-            """.format(
+                """.format(
                     ",".join("?" * len(message_ids))
                 ),
-                (*message_ids, recipient),
+                (*message_ids, username),
             )
-            conn.commit()
+
+    def mark_read_from_user(self, recipient: str, sender: str) -> None:
+        """Mark all messages from a specific user as read"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE messages 
+                SET read_status = TRUE 
+                WHERE sender = ? AND recipient = ? AND read_status = FALSE
+                """,
+                (sender, recipient),
+            )
 
     def get_unread_count(self, recipient: str) -> int:
         """Get count of unread messages for a recipient"""
@@ -193,28 +205,52 @@ class Database:
                 """
                 SELECT COUNT(*)
                 FROM messages
-                WHERE recipient = ? AND read_status = FALSE AND delivered = FALSE
-            """,
+                WHERE recipient = ? AND read_status = FALSE
+                """,
                 (recipient,),
             )
             return cursor.fetchone()[0]
 
-    def delete_messages(self, message_ids: List[int], username: str) -> int:
-        """Delete messages for a user (must be sender or recipient)
-        Returns number of messages deleted"""
+    def delete_messages(
+        self, message_ids: List[int], username: str, recipient: str
+    ) -> Tuple[int, List[Tuple[str, bool]]]:
+        """Delete messages for a user (must be between sender and recipient)
+        Returns tuple of (number of messages deleted, list of (recipient, was_unread) tuples)
+        """
+        deleted_info = []
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
+            # First get info about messages to be deleted
+            cursor.execute(
+                """
+                SELECT recipient, read_status = FALSE
+                FROM messages 
+                WHERE id IN ({}) AND (
+                    (sender = ? AND recipient = ?) OR
+                    (sender = ? AND recipient = ?)
+                )
+                """.format(
+                    ",".join("?" * len(message_ids))
+                ),
+                (*message_ids, username, recipient, recipient, username),
+            )
+            deleted_info = cursor.fetchall()
+
+            # Then delete the messages
             cursor.execute(
                 """
                 DELETE FROM messages 
-                WHERE id IN ({}) AND (sender = ? OR recipient = ?)
-            """.format(
+                WHERE id IN ({}) AND (
+                    (sender = ? AND recipient = ?) OR
+                    (sender = ? AND recipient = ?)
+                )
+                """.format(
                     ",".join("?" * len(message_ids))
                 ),
-                (*message_ids, username, username),
+                (*message_ids, username, recipient, recipient, username),
             )
             conn.commit()
-            return cursor.rowcount
+            return cursor.rowcount, deleted_info
 
     def get_all_users(self) -> List[str]:
         """Get a list of all registered users"""
@@ -222,3 +258,40 @@ class Database:
             cursor = conn.cursor()
             cursor.execute("SELECT username FROM users")
             return [row[0] for row in cursor.fetchall()]
+
+    def get_messages_between_users(
+        self, user1: str, user2: str, limit: int = 50
+    ) -> List[ChatMessage]:
+        """Get messages exchanged between two users"""
+        query = """
+            SELECT m.id, m.sender, m.recipient, m.content, m.timestamp, m.message_type
+            FROM messages m
+            WHERE (
+                (m.sender = ? AND m.recipient = ?)
+                OR 
+                (m.sender = ? AND m.recipient = ?)
+            )
+            ORDER BY m.timestamp ASC
+            LIMIT ?
+        """
+
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.execute(query, (user1, user2, user2, user1, limit))
+                rows = cursor.fetchall()
+                messages = []
+                for row in rows:
+                    # row indices: 0=id, 1=sender, 2=recipient, 3=content, 4=timestamp, 5=message_type
+                    message = ChatMessage(
+                        username=row[1],  # sender
+                        content=row[3],
+                        message_type=MessageType.DM,
+                        message_id=row[0],
+                        recipients=[row[2]],  # recipient
+                        timestamp=datetime.fromisoformat(row[4]),
+                    )
+                    messages.append(message)
+                return messages
+        except Exception as e:
+            print(f"Error fetching messages between users: {e}")
+            return []

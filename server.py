@@ -81,24 +81,36 @@ class ChatServer:
         message_id = self.db.store_message(message)
         message.message_id = message_id
 
-        # Try to deliver if recipient is online
+        # Send to recipient if they're online
         recipient = message.recipients[0]
         if recipient in self.usernames:
             recipient_socket = self.usernames[recipient]
             if self.send_to_client(recipient_socket, message):
                 self.db.mark_delivered(message_id)
 
+        # Also send back to sender so they see their own message with the ID
+        if message.username in self.usernames:
+            self.send_to_client(self.usernames[message.username], message)
+
     def handle_fetch_request(
         self, message: ChatMessage, client_socket: socket.socket
     ) -> None:
-        """Handle request to fetch unread messages"""
+        """Handle request to fetch messages"""
         if not message.fetch_count:
             message.fetch_count = 10  # Default limit
 
-        # Get unread messages
-        messages = self.db.get_unread_messages(
-            recipient=message.username, limit=message.fetch_count
-        )
+        # If recipients list has two users, fetch messages between them
+        if message.recipients and len(message.recipients) == 2:
+            user1, user2 = message.recipients
+            # Get messages where either user is sender and other is recipient
+            messages = self.db.get_messages_between_users(
+                user1=user1, user2=user2, limit=message.fetch_count
+            )
+        else:
+            # Get unread messages for single user
+            messages = self.db.get_unread_messages(
+                recipient=message.username, limit=message.fetch_count
+            )
 
         # Get total unread count for progress tracking
         total_unread = self.db.get_unread_count(message.username)
@@ -111,23 +123,75 @@ class ChatServer:
 
     def handle_mark_read(self, message: ChatMessage) -> None:
         """Handle request to mark messages as read"""
-        if message.message_ids:
+        if message.recipients:
+            # Mark all messages from the specified user as read
+            self.db.mark_read_from_user(message.username, message.recipients[0])
+
+            # Send updated unread count to the user
+            unread_count = self.db.get_unread_count(message.username)
+            if message.username in self.usernames:
+                notification = ChatMessage(
+                    username="System",
+                    content="",
+                    message_type=MessageType.CHAT,
+                    unread_count=unread_count,
+                )
+                self.send_to_client(self.usernames[message.username], notification)
+        elif message.message_ids:
+            # Mark specific messages as read
             self.db.mark_read(message.message_ids, message.username)
+
+            # Send updated unread count to the user
+            unread_count = self.db.get_unread_count(message.username)
+            if message.username in self.usernames:
+                notification = ChatMessage(
+                    username="System",
+                    content="",
+                    message_type=MessageType.CHAT,
+                    unread_count=unread_count,
+                )
+                self.send_to_client(self.usernames[message.username], notification)
 
     def handle_delete_messages(self, message: ChatMessage) -> None:
         """Handle request to delete messages"""
-        if message.message_ids:
-            deleted_count = self.db.delete_messages(
-                message.message_ids, message.username
+        if (
+            message.message_ids and message.recipients
+        ):  # Ensure we have both message IDs and recipient
+            deleted_count, deleted_info = self.db.delete_messages(
+                message.message_ids, message.username, message.recipients[0]
             )
-            # Notify user of deletion
-            notification = ChatMessage(
-                username="System",
-                content=SystemMessage.MESSAGES_DELETED.format(deleted_count),
-                message_type=MessageType.CHAT,
-            )
-            if message.username in self.usernames:
-                self.send_to_client(self.usernames[message.username], notification)
+
+            # Create a set of users to notify (both sender and recipients)
+            users_to_notify = {message.username}  # Start with the sender
+
+            # Track unread counts per user that need to be decremented
+            unread_decrements: Dict[str, int] = (
+                {}
+            )  # user -> count of their unread messages being deleted
+
+            # Process deleted messages info
+            for recipient, was_unread in deleted_info:
+                users_to_notify.add(recipient)
+                if was_unread:
+                    # If this message was unread, increment the count for the recipient
+                    unread_decrements[recipient] = (
+                        unread_decrements.get(recipient, 0) + 1
+                    )
+
+            # Notify all affected users
+            for user in users_to_notify:
+                if user in self.usernames:
+                    # For each user, send their specific unread decrement
+                    # Only include unread_count if this user had unread messages deleted
+                    unread_count = unread_decrements.get(user, 0)
+                    notification = ChatMessage(
+                        username=message.username,  # Who deleted the messages
+                        content="",  # No content needed
+                        message_type=MessageType.DELETE_NOTIFICATION,
+                        message_ids=message.message_ids,  # Include the deleted message IDs
+                        unread_count=unread_count,  # Include unread decrement for this specific user
+                    )
+                    self.send_to_client(self.usernames[user], notification)
 
     def send_to_recipients(self, message: ChatMessage, exclude_socket=None):
         """Send message to specific recipients or broadcast if no recipients specified"""

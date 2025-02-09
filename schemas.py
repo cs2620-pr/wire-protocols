@@ -15,6 +15,7 @@ class MessageType(str, Enum):
     FETCH = "fetch"
     MARK_READ = "mark_read"
     DELETE = "delete"
+    DELETE_NOTIFICATION = "delete_notification"
 
 
 class Status(str, Enum):
@@ -74,6 +75,7 @@ class ChatMessage(BaseModel):
     )
     password: Optional[str] = None  # For authentication messages
     active_users: Optional[List[str]] = None  # List of currently active users
+    unread_count: Optional[int] = None  # Number of unread messages for notifications
     # None means broadcast to all (for CHAT type)
 
     def __str__(self) -> str:
