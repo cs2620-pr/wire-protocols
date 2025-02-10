@@ -2,6 +2,70 @@
 
 **Pranav Ramesh, Mohammmed Zidan Cassim**
 
+## 02/10
+
+### Update 1
+
+GUI Improvements and System Message Refinements:
+
+1. System Message Display Consistency:
+   - Problem: System message display and user list had inconsistent widths
+   - Solution:
+     * Added consistent width management using a shared `right_panel_width` variable
+     * Set both user list and system message display to the same width (200px)
+     * Improved visual alignment and UI consistency
+   - Technical Details:
+     ```python
+     right_panel_width = 200
+     self.user_list.setMaximumWidth(right_panel_width)
+     self.system_message_display.setMaximumWidth(right_panel_width)
+     ```
+
+2. System Message Content Updates:
+   - Problem: System messages still referenced CLI commands (e.g., "/fetch [n]") that weren't applicable to GUI
+   - Changes Made:
+     * Updated `UNREAD_MESSAGES` system message in `schemas.py`
+     * Old message: "You have {} unread messages. Use /fetch [n] to retrieve them."
+     * New message: "You have {} unread messages"
+   - Rationale:
+     * GUI handles message fetching automatically
+     * No need for manual fetch commands
+     * Cleaner, more appropriate messaging for GUI context
+
+3. Implementation Considerations:
+   - Layout Management:
+     * Used QVBoxLayout for consistent vertical stacking
+     * Maintained proper spacing and alignment
+     * Ensured scalability for different window sizes
+   - Visual Hierarchy:
+     * Clear separation between user list and system messages
+     * Consistent styling for better readability
+     * Proper use of Qt's layout system for reliable rendering
+
+4. Potential Issues Addressed:
+   - Width Consistency:
+     * Previous implementation had potential for misaligned widths
+     * Could cause visual inconsistency on different platforms
+     * Fixed by using a shared width constant
+   - Message Clarity:
+     * Old CLI-style messages could confuse GUI users
+     * Removed references to command-line operations
+     * Made system messages more intuitive for GUI interaction
+
+5. Future Considerations:
+   - Dynamic Sizing:
+     * Could add responsive width adjustment based on window size
+     * Potential for user-customizable panel widths
+   - Theme Integration:
+     * System message display follows main theme
+     * Could add more sophisticated styling options
+   - Message Management:
+     * Might need message truncation for long system messages
+     * Could add message history scrolling
+     * Potential for message filtering or categorization
+
+These changes improve the overall user experience by making the interface more consistent and removing confusing references to command-line operations that aren't relevant in the GUI context. 
+
 ## 02/09
 
 ### Update 1

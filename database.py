@@ -295,3 +295,30 @@ class Database:
         except Exception as e:
             print(f"Error fetching messages between users: {e}")
             return []
+
+    def delete_user(self, username: str) -> bool:
+        """Delete a user and all their messages. Returns True if successful."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                # Delete all messages where user is sender or recipient
+                cursor.execute(
+                    """
+                    DELETE FROM messages 
+                    WHERE sender = ? OR recipient = ?
+                    """,
+                    (username, username),
+                )
+                # Delete the user
+                cursor.execute(
+                    """
+                    DELETE FROM users 
+                    WHERE username = ?
+                    """,
+                    (username,),
+                )
+                conn.commit()
+                return True
+        except Exception as e:
+            print(f"Error deleting user: {e}")
+            return False

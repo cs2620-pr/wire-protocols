@@ -16,6 +16,7 @@ class MessageType(str, Enum):
     MARK_READ = "mark_read"
     DELETE = "delete"
     DELETE_NOTIFICATION = "delete_notification"
+    DELETE_ACCOUNT = "delete_account"
 
 
 class Status(str, Enum):
@@ -36,6 +37,7 @@ class SystemMessage(str, Enum):
     INVALID_CREDENTIALS = "Invalid username or password"
     USER_ALREADY_LOGGED_IN = "User already logged in"
     LOGIN_SUCCESS = "Login successful"
+    ACCOUNT_DELETED = "{} has deleted their account"
 
     # Connection messages
     CONNECTION_LOST = "Lost connection to server. The application will now close."
@@ -51,7 +53,7 @@ class SystemMessage(str, Enum):
     USER_JOINED = "{} has joined the chat"
     USER_LEFT = "{} has left the chat"
     MESSAGES_DELETED = "Deleted {} message(s)"
-    UNREAD_MESSAGES = "You have {} unread messages. Use /fetch [n] to retrieve them."
+    UNREAD_MESSAGES = "You have {} unread messages"
 
 
 class AuthMessage(BaseModel):

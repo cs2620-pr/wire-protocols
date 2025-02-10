@@ -24,6 +24,7 @@ from typing import Optional, List, Set
 from queue import Queue
 from schemas import ChatMessage, MessageType, ServerResponse, Status, SystemMessage
 from protocol import Protocol, ProtocolFactory
+from datetime import datetime
 
 
 class LoginDialog(QDialog):
@@ -142,6 +143,7 @@ class ChatWindow(QMainWindow):
         super().__init__()
         self.client = None
         self.receive_thread = None
+        self.system_message_display = None  # Initialize the attribute
         self.init_ui()
 
     def init_ui(self):
@@ -159,8 +161,6 @@ class ChatWindow(QMainWindow):
         # Chat display area
         self.chat_display = QTextEdit()
         self.chat_display.setReadOnly(True)
-        # Set background and text color based on system theme
-        self.update_theme()
         chat_layout.addWidget(self.chat_display)
 
         # Message input area
@@ -184,9 +184,13 @@ class ChatWindow(QMainWindow):
         self.delete_button.clicked.connect(self.delete_messages)
         self.logout_button = QPushButton("Logout")
         self.logout_button.clicked.connect(self.logout)
+        self.delete_account_button = QPushButton("Delete Account")
+        self.delete_account_button.clicked.connect(self.delete_account)
+        self.delete_account_button.setStyleSheet("QPushButton { color: red; }")
 
         button_layout.addWidget(self.delete_button)
         button_layout.addWidget(self.logout_button)
+        button_layout.addWidget(self.delete_account_button)
 
         chat_layout.addLayout(button_layout)
         main_layout.addLayout(chat_layout, stretch=7)  # Chat area takes 70% of width
@@ -205,11 +209,27 @@ class ChatWindow(QMainWindow):
         separator.setFrameShadow(QFrame.Sunken)
         user_list_layout.addWidget(separator)
 
+        # Set consistent width for the right panel
+        right_panel_width = 200
+
         user_list_layout.addWidget(QLabel("Other Users:"))
         self.user_list = QListWidget()
-        self.user_list.setMaximumWidth(200)  # Limit width of user list
+        self.user_list.setMaximumWidth(right_panel_width)  # Set consistent width
         self.user_list.itemClicked.connect(self.on_user_clicked)
         user_list_layout.addWidget(self.user_list)
+
+        # Initialize system message display first
+        self.system_message_display = QTextEdit()
+        self.system_message_display.setReadOnly(True)
+        self.system_message_display.setMaximumHeight(150)  # Limit height
+        self.system_message_display.setMaximumWidth(
+            right_panel_width
+        )  # Set consistent width
+
+        # Add system message area
+        user_list_layout.addWidget(QLabel("System Messages:"))
+        user_list_layout.addWidget(self.system_message_display)
+
         main_layout.addLayout(
             user_list_layout, stretch=3
         )  # User list takes 30% of width
@@ -224,6 +244,9 @@ class ChatWindow(QMainWindow):
         # Initially disable UI elements until connected
         self.set_ui_enabled(False)
 
+        # Set theme after all widgets are initialized
+        self.update_theme()
+
         # Show login dialog on startup
         self.show_login_dialog()
 
@@ -233,6 +256,7 @@ class ChatWindow(QMainWindow):
         self.send_button.setEnabled(enabled)
         self.delete_button.setEnabled(enabled)
         self.logout_button.setEnabled(enabled)
+        self.delete_account_button.setEnabled(enabled)
         self.user_list.setEnabled(enabled)
 
     def show_login_dialog(self):
@@ -275,15 +299,18 @@ class ChatWindow(QMainWindow):
 
         # Enable UI elements
         self.set_ui_enabled(True)
+
+        # Clear previous system messages
+        self.system_message_display.clear()
+
         # Display system message
-        html = """
-            <div style="text-align: center; margin: 10px 0;">
-                <span style="color: #888888; font-style: italic;">
-                    Connected to server!
-                </span>
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        html = f"""
+            <div style="margin: 4px 0;">
+                <span style="color: #888888;">[{timestamp}]</span> Connected to server!
             </div>
         """
-        self.chat_display.append(html)
+        self.system_message_display.append(html)
 
         # Update window title to include username
         self.setWindowTitle(f"Chat Client - {username}")
@@ -307,6 +334,8 @@ class ChatWindow(QMainWindow):
         # Set background color based on system theme
         bg_color = "#2D2D2D" if is_dark else "#FFFFFF"
         text_color = "#FFFFFF" if is_dark else "#000000"
+        system_bg_color = "#3D3D3D" if is_dark else "#F5F5F5"
+        system_border_color = "#4D4D4D" if is_dark else "#CCCCCC"
 
         # Apply theme to chat display
         self.chat_display.setStyleSheet(
@@ -315,6 +344,19 @@ class ChatWindow(QMainWindow):
                 background-color: {bg_color};
                 color: {text_color};
                 border: none;
+            }}
+        """
+        )
+
+        # Apply theme to system message display
+        self.system_message_display.setStyleSheet(
+            f"""
+            QTextEdit {{
+                background-color: {system_bg_color};
+                color: {text_color};
+                border: 1px solid {system_border_color};
+                border-radius: 4px;
+                font-size: 12px;
             }}
         """
         )
@@ -415,6 +457,7 @@ class ChatWindow(QMainWindow):
 
         # Clear all state
         self.chat_display.clear()
+        self.system_message_display.clear()  # Clear system messages
         self.current_chat_user = None
         self.unread_counts.clear()
         self.active_users.clear()
@@ -611,10 +654,70 @@ class ChatWindow(QMainWindow):
                 item.setText(text)
                 break
 
+    def delete_account(self):
+        """Handle account deletion with confirmation"""
+        reply = QMessageBox.question(
+            self,
+            "Delete Account",
+            "Are you sure you want to delete your account?\nThis action cannot be undone!",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+
+        if reply == QMessageBox.Yes:
+            # Send delete account message
+            delete_message = ChatMessage(
+                username=self.client.username,
+                content="",
+                message_type=MessageType.DELETE_ACCOUNT,
+            )
+            if self.client.send_message(delete_message):
+                # Set voluntary disconnect flag to prevent connection lost message
+                self.client.is_voluntary_disconnect = True
+                # Close the window and show login dialog
+                self.close()
+                QMessageBox.information(
+                    self,
+                    "Account Deleted",
+                    "Your account has been deleted successfully.",
+                )
+                self.show_login_dialog()
+
     def handle_message(self, message: str, message_obj: Optional[ChatMessage] = None):
         """Handle incoming messages and update UI accordingly"""
         if message_obj:
             self.handle_server_message(message_obj)
+
+            # Handle system messages
+            is_system_message = (
+                message_obj.message_type
+                in [MessageType.JOIN, MessageType.LEAVE, MessageType.DELETE_ACCOUNT]
+                or message_obj.username == "System"
+            )
+
+            if is_system_message:
+                # Add timestamp to system message
+                timestamp = message_obj.timestamp.strftime("%H:%M:%S")
+                html = f"""
+                    <div style="margin: 4px 0;">
+                        <span style="color: #888888;">[{timestamp}]</span> {message}
+                    </div>
+                """
+                self.system_message_display.append(html)
+                return
+
+            # Handle account deletion notifications
+            if message_obj.message_type == MessageType.DELETE_ACCOUNT:
+                # Just display the notification, user list will be updated separately
+                html = f"""
+                    <div style="text-align: center; margin: 10px 0;">
+                        <span style="color: #888888; font-style: italic;">
+                            {message}
+                        </span>
+                    </div>
+                """
+                self.chat_display.append(html)
+                return
 
             # Handle message deletion notifications
             if message_obj.message_type == MessageType.DELETE_NOTIFICATION:

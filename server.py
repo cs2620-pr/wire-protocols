@@ -408,6 +408,39 @@ class ChatServer:
                             continue
                         print(f"DM from {username} to {message.recipients}")
                         self.handle_dm(message, client_socket)
+                    elif message.message_type == MessageType.DELETE_ACCOUNT:
+                        # Delete the user's account
+                        if username is None:
+                            continue
+
+                        if self.db.delete_user(username):
+                            # Notify all users about the account deletion
+                            notification = ChatMessage(
+                                username="System",
+                                content=SystemMessage.ACCOUNT_DELETED.format(username),
+                                message_type=MessageType.DELETE_ACCOUNT,
+                                recipients=list(
+                                    self.usernames.keys()
+                                ),  # Send to all active users
+                            )
+                            self.send_to_recipients(notification)
+
+                            # Send updated user list to all remaining users
+                            all_users = self.db.get_all_users()
+                            active_users = [
+                                u for u in self.usernames.keys() if u != username
+                            ]
+                            update = ChatMessage(
+                                username="System",
+                                content="",
+                                message_type=MessageType.LOGIN,  # Reuse LOGIN type for user list update
+                                recipients=all_users,
+                                active_users=active_users,
+                            )
+                            self.send_to_recipients(update)
+
+                            # Close the connection
+                            break
                     else:
                         self.send_to_recipients(message)
 
