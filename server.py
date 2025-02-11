@@ -5,6 +5,7 @@ from typing import Dict, List, Set, Optional
 from schemas import ChatMessage, ServerResponse, MessageType, Status, SystemMessage
 from protocol import Protocol, ProtocolFactory
 from database import Database
+import argparse
 
 
 class ChatServer:
@@ -504,8 +505,20 @@ class ChatServer:
 
 
 if __name__ == "__main__":
-    protocol = ProtocolFactory.create("json")
-    server = ChatServer(protocol=protocol)
+    parser = argparse.ArgumentParser(description="Start the chat server")
+    parser.add_argument("--host", default="localhost", help="Host address to bind to")
+    parser.add_argument("--port", type=int, default=8000, help="Port to listen on")
+    parser.add_argument(
+        "--protocol",
+        default="json",
+        choices=["json", "custom"],
+        help="Protocol type to use",
+    )
+
+    args = parser.parse_args()
+
+    protocol = ProtocolFactory.create(args.protocol)
+    server = ChatServer(protocol=protocol, host=args.host, port=args.port)
     try:
         server.start()
     except KeyboardInterrupt:

@@ -25,6 +25,7 @@ from queue import Queue
 from schemas import ChatMessage, MessageType, ServerResponse, Status, SystemMessage
 from protocol import Protocol, ProtocolFactory
 from datetime import datetime
+import argparse
 
 
 class LoginDialog(QDialog):
@@ -139,11 +140,16 @@ class ReceiveThread(QThread):
 
 
 class ChatWindow(QMainWindow):
-    def __init__(self):
+    def __init__(
+        self, host: str = "localhost", port: int = 8000, protocol: str = "json"
+    ):
         super().__init__()
-        self.client = None
-        self.receive_thread = None
-        self.system_message_display = None  # Initialize the attribute
+        self.client: ChatClient | None = None
+        self.receive_thread: ReceiveThread | None = None
+        self.system_message_display: QTextEdit | None = None  # Initialize the attribute
+        self.server_host = host
+        self.server_port = port
+        self.protocol_type = protocol
         self.init_ui()
 
     def init_ui(self):
@@ -275,7 +281,12 @@ class ChatWindow(QMainWindow):
             self.close()  # This will trigger closeEvent which exits the app
 
     def connect_to_server(self, username: str, password: str, action: str) -> bool:
-        self.client = ChatClient(username, protocol=ProtocolFactory.create("json"))
+        self.client = ChatClient(
+            username,
+            protocol=ProtocolFactory.create(self.protocol_type),
+            host=self.server_host,
+            port=self.server_port,
+        )
 
         if not self.client.connect():
             QMessageBox.critical(
@@ -301,7 +312,8 @@ class ChatWindow(QMainWindow):
         self.set_ui_enabled(True)
 
         # Clear previous system messages
-        self.system_message_display.clear()
+        if self.system_message_display:
+            self.system_message_display.clear()
 
         # Display system message
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -310,7 +322,8 @@ class ChatWindow(QMainWindow):
                 <span style="color: #888888;">[{timestamp}]</span> Connected to server!
             </div>
         """
-        self.system_message_display.append(html)
+        if self.system_message_display:
+            self.system_message_display.append(html)
 
         # Update window title to include username
         self.setWindowTitle(f"Chat Client - {username}")
@@ -363,6 +376,9 @@ class ChatWindow(QMainWindow):
 
     def display_message(self, sender: str, content: str, msg_id: Optional[str] = None):
         """Display a message with colored sender name followed by content"""
+        if not self.client:
+            return
+
         is_from_me = sender == self.client.username
         palette = self.palette()
         is_dark = palette.color(palette.Window).lightness() < 128
@@ -507,6 +523,9 @@ class ChatWindow(QMainWindow):
 
     def update_user_list(self, all_users: List[str], active_users: List[str]):
         """Update the user list display"""
+        if not self.client:
+            return
+
         self.user_list.clear()
         self.active_users = set(active_users)  # Update active users set
 
@@ -619,6 +638,9 @@ class ChatWindow(QMainWindow):
 
     def load_chat_history(self, username: str):
         """Load chat history for a specific user"""
+        if not self.client:
+            return
+
         # Request all messages between the current user and the selected user
         history_message = ChatMessage(
             username=self.client.username,
@@ -685,6 +707,9 @@ class ChatWindow(QMainWindow):
 
     def handle_message(self, message: str, message_obj: Optional[ChatMessage] = None):
         """Handle incoming messages and update UI accordingly"""
+        if not self.client:
+            return
+
         if message_obj:
             self.handle_server_message(message_obj)
 
@@ -703,7 +728,8 @@ class ChatWindow(QMainWindow):
                         <span style="color: #888888;">[{timestamp}]</span> {message}
                     </div>
                 """
-                self.system_message_display.append(html)
+                if self.system_message_display:
+                    self.system_message_display.append(html)
                 return
 
             # Handle account deletion notifications
@@ -992,8 +1018,20 @@ class ChatClient:
 
 
 def main():
-    app = QApplication(sys.argv)
-    window = ChatWindow()
+    parser = argparse.ArgumentParser(description="Start the chat client")
+    parser.add_argument("--host", default="localhost", help="Server host address")
+    parser.add_argument("--port", type=int, default=8000, help="Server port")
+    parser.add_argument(
+        "--protocol",
+        default="json",
+        choices=["json", "custom"],
+        help="Protocol type to use",
+    )
+
+    args = parser.parse_args()
+
+    app = QApplication(sys.argv[1:])  # Skip the argparse arguments
+    window = ChatWindow(host=args.host, port=args.port, protocol=args.protocol)
     window.show()
     sys.exit(app.exec_())
 

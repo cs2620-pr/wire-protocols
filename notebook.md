@@ -4,6 +4,74 @@
 
 ## 02/10
 
+### Update 2
+
+Type Safety and Null State Handling Improvements:
+
+1. Enhanced Type Safety:
+   - Added proper type hints to critical class attributes:
+     ```python
+     self.client: ChatClient | None = None
+     self.receive_thread: ReceiveThread | None = None
+     self.system_message_display: QTextEdit | None = None
+     ```
+   - Improved IDE support and static type checking
+   - Makes code more maintainable and helps catch type-related bugs early
+
+2. Null State Protection:
+   - Added null checks before accessing potentially uninitialized objects:
+     ```python
+     if not self.client:
+         return
+     ```
+   - Protected key methods:
+     * `display_message`
+     * `update_user_list`
+     * `load_chat_history`
+     * `handle_message`
+   - Ensures graceful handling of edge cases during initialization and cleanup
+
+3. System Message Display Safety:
+   - Added checks before accessing system message display:
+     ```python
+     if self.system_message_display:
+         self.system_message_display.clear()
+     ```
+   - Prevents null pointer exceptions during:
+     * Message display
+     * Display clearing
+     * System notifications
+   - Maintains UI stability during state transitions
+
+4. Implementation Details:
+   - Command Line Arguments:
+     * Host (default: "localhost")
+     * Port (default: 8000)
+     * Protocol (default: "json", choices: ["json", "custom"])
+   - Type-safe initialization:
+     ```python
+     def __init__(
+         self,
+         host: str = "localhost",
+         port: int = 8000,
+         protocol: str = "json"
+     )
+     ```
+   - Proper state management during:
+     * Connection setup
+     * Message handling
+     * UI updates
+     * Cleanup
+
+5. Benefits:
+   - Improved code reliability
+   - Better error prevention
+   - Enhanced maintainability
+   - Clearer code intent
+   - Better development experience with IDE support
+
+These changes make the application more robust by properly handling null states and providing better type safety, reducing the likelihood of runtime errors and improving the overall code quality.
+
 ### Update 1
 
 GUI Improvements and System Message Refinements:
