@@ -63,67 +63,302 @@ class JSONProtocol(Protocol):
         return message, remaining
 
 
+import struct
+from datetime import datetime
+from typing import Optional, Tuple
+from schemas import ChatMessage, ServerResponse, MessageType, Status
+from protocol import Protocol
+
 class CustomWireProtocol(Protocol):
     """
-    Custom binary wire protocol implementation
-    Format:
-    [1 byte: message type][4 bytes: message length][N bytes: message payload]
-
-    Message Types:
-    0x01: ChatMessage
-    0x02: ServerResponse
-
-    Payload format is defined separately for each message type to be as efficient as possible
+    Custom binary wire protocol implementation.
+    
+    Overall frame:
+      [1 byte: message type][4 bytes: payload length][payload]
+      
+    Message Types (header byte values):
+      0x01: chat         (default for ChatMessage)
+      0x02: server_response
+      0x03: login
+      0x04: register
+      0x05: dm
+      0x06: fetch
+      0x07: mark_read
+      0x08: delete
+      0x09: delete_notification
+      0x0A: delete_account
+      0x0B: leave
+      0x0C: join
     """
+    MESSAGE_TYPES = {
+        "chat": 0x01,
+        "server_response": 0x02,
+        "login": 0x03,
+        "register": 0x04,
+        "dm": 0x05,
+        "fetch": 0x06,
+        "mark_read": 0x07,
+        "delete": 0x08,
+        "delete_notification": 0x09,
+        "delete_account": 0x0A,
+        "leave": 0x0B,
+        "join": 0x0C,
+    }
+    # Reverse mapping for deserialization.
+    REVERSE_MESSAGE_TYPES = {v: k for k, v in MESSAGE_TYPES.items()}
 
-    MESSAGE_TYPES = {"chat": 0x01, "server_response": 0x02}
+    # --- Helper methods for encoding/decoding strings ---
+    def serialize_string(self, s: str) -> bytes:
+        """Serialize a string as: [2 bytes: length][N bytes: UTF-8 data]"""
+        encoded = s.encode('utf-8')
+        print(f"[DEBUG] Serializing string: '{s}' with length {len(encoded)}")
+        return struct.pack('!H', len(encoded)) + encoded
 
-    def __init__(self):
-        # We'll implement the detailed binary format later
-        pass
+    def deserialize_string(self, data: bytes, offset: int) -> Tuple[str, int]:
+        """Deserialize a length-prefixed string from offset.
+           Returns (decoded_string, new_offset)."""
+        length = struct.unpack_from('!H', data, offset)[0]
+        offset += 2
+        s = data[offset:offset+length].decode('utf-8')
+        print(f"[DEBUG] Deserialized string: '{s}' with length {length} at offset {offset-2}")
+        offset += length
+        return s, offset
 
+    # --- ChatMessage methods ---
     def serialize_message(self, message: ChatMessage) -> bytes:
-        # Placeholder for custom binary format
-        # TODO: Implement efficient binary serialization
-        data = json.dumps(message.model_dump()).encode()
-        msg_type = self.MESSAGE_TYPES["chat"].to_bytes(1, "big")
-        length = len(data).to_bytes(4, "big")
-        return msg_type + length + data
+        """
+        Serialize a ChatMessage into our custom binary format.
+        The payload includes (in order):
+          1. message_id: 4 bytes (0 means None)
+          2. username: length-prefixed string
+          3. content: length-prefixed string
+          4. timestamp: 8 bytes (double; seconds since epoch)
+          5. recipients: 1 byte count, then each as a length-prefixed string
+          6. fetch_count: 4 bytes (0 if not set)
+          7. password: length-prefixed string (empty if None)
+          8. active_users: 1 byte count, then each as a length-prefixed string
+          9. unread_count: 4 bytes (0 if not set)
+        """
+        # Use the enum’s value (a lowercase string) for header type.
+        msg_type_key = message.message_type.value.lower()
+        if msg_type_key not in self.MESSAGE_TYPES:
+            print(f"[DEBUG] Unknown message type '{msg_type_key}', defaulting to 'chat'.")
+            msg_type_key = "chat"
+        header_type = self.MESSAGE_TYPES[msg_type_key].to_bytes(1, "big")
+        print(f"[DEBUG] Serializing message of type '{message.message_type.value}' as header byte: {header_type.hex()}")
+
+        payload = b""
+        # 1. message_id
+        msg_id = message.message_id if message.message_id is not None else 0
+        payload += struct.pack('!I', msg_id)
+        print(f"[DEBUG] Serialized message_id: {msg_id}")
+        # 2. username
+        payload += self.serialize_string(message.username)
+        # 3. content
+        payload += self.serialize_string(message.content)
+        # 4. timestamp
+        ts = message.timestamp.timestamp()
+        payload += struct.pack('!d', ts)
+        print(f"[DEBUG] Serialized timestamp: {ts} (from {message.timestamp})")
+        # 5. recipients
+        recipients = message.recipients if message.recipients else []
+        payload += struct.pack('!B', len(recipients))
+        print(f"[DEBUG] Serialized {len(recipients)} recipient(s).")
+        for recipient in recipients:
+            payload += self.serialize_string(recipient)
+        # 6. fetch_count
+        fetch_count = message.fetch_count if message.fetch_count is not None else 0
+        payload += struct.pack('!I', fetch_count)
+        print(f"[DEBUG] Serialized fetch_count: {fetch_count}")
+        # 7. password
+        password_str = message.password if message.password is not None else ""
+        payload += self.serialize_string(password_str)
+        print(f"[DEBUG] Serialized password: '{password_str}'")
+        # 8. active_users
+        active_users = message.active_users if message.active_users else []
+        payload += struct.pack('!B', len(active_users))
+        print(f"[DEBUG] Serialized {len(active_users)} active user(s).")
+        for user in active_users:
+            payload += self.serialize_string(user)
+        # 9. unread_count
+        unread = message.unread_count if message.unread_count is not None else 0
+        payload += struct.pack('!I', unread)
+        print(f"[DEBUG] Serialized unread_count: {unread}")
+
+        payload_length = len(payload)
+        print(f"[DEBUG] Total payload length: {payload_length} bytes")
+        length_bytes = payload_length.to_bytes(4, "big")
+        final_message = header_type + length_bytes + payload
+        print(f"[DEBUG] Final serialized message length: {len(final_message)} bytes")
+        return final_message
 
     def deserialize_message(self, data: bytes) -> ChatMessage:
-        # Placeholder for custom binary format
-        # TODO: Implement efficient binary deserialization
-        payload = data[5:]  # Skip type and length
-        return ChatMessage.model_validate_json(payload.decode())
+        """
+        Deserialize a ChatMessage from data.
+        Expects: [1 byte: type][4 bytes: payload length][payload]
+        """
+        header_type = data[0]
+        msg_type_str = self.REVERSE_MESSAGE_TYPES.get(header_type, "chat")
+        print(f"[DEBUG] Deserializing message with header byte: {header_type:#04x} mapped to type '{msg_type_str}'")
+        offset = 5  # Skip header.
+        # 1. message_id
+        msg_id = struct.unpack_from('!I', data, offset)[0]
+        offset += 4
+        print(f"[DEBUG] Deserialized message_id: {msg_id}")
+        # 2. username
+        username, offset = self.deserialize_string(data, offset)
+        # 3. content
+        content, offset = self.deserialize_string(data, offset)
+        # 4. timestamp
+        ts = struct.unpack_from('!d', data, offset)[0]
+        offset += 8
+        timestamp = datetime.fromtimestamp(ts)
+        print(f"[DEBUG] Deserialized timestamp: {ts} -> {timestamp}")
+        # 5. recipients
+        rec_count = struct.unpack_from('!B', data, offset)[0]
+        offset += 1
+        print(f"[DEBUG] Deserialized recipient count: {rec_count}")
+        recipients = []
+        for _ in range(rec_count):
+            rec, offset = self.deserialize_string(data, offset)
+            recipients.append(rec)
+        # 6. fetch_count
+        fetch_count = struct.unpack_from('!I', data, offset)[0]
+        offset += 4
+        print(f"[DEBUG] Deserialized fetch_count: {fetch_count}")
+        # 7. password
+        password, offset = self.deserialize_string(data, offset)
+        print(f"[DEBUG] Deserialized password: '{password}'")
+        # 8. active_users
+        active_count = struct.unpack_from('!B', data, offset)[0]
+        offset += 1
+        print(f"[DEBUG] Deserialized active user count: {active_count}")
+        active_users = []
+        for _ in range(active_count):
+            user, offset = self.deserialize_string(data, offset)
+            active_users.append(user)
+        # 9. unread_count
+        unread = struct.unpack_from('!I', data, offset)[0]
+        offset += 4
+        print(f"[DEBUG] Deserialized unread_count: {unread}")
 
+        return ChatMessage(
+            message_id=msg_id if msg_id != 0 else None,
+            message_type=MessageType(msg_type_str),
+            username=username,
+            content=content,
+            timestamp=timestamp,
+            recipients=recipients if recipients else None,
+            fetch_count=fetch_count if fetch_count != 0 else None,
+            password=password if password != "" else None,
+            active_users=active_users if active_users else None,
+            unread_count=unread if unread != 0 else None,
+        )
+
+    # --- ServerResponse methods ---
     def serialize_response(self, response: ServerResponse) -> bytes:
-        # Placeholder for custom binary format
-        # TODO: Implement efficient binary serialization
-        data = json.dumps(response.model_dump()).encode()
-        msg_type = self.MESSAGE_TYPES["server_response"].to_bytes(1, "big")
-        length = len(data).to_bytes(4, "big")
-        return msg_type + length + data
+        """
+        Serialize a ServerResponse.
+        
+        Payload fields (in order):
+          1. status: 1 byte (0 for SUCCESS, 1 for ERROR)
+          2. message: length-prefixed string
+          3. unread_count: 4 bytes (0 if not set)
+          4. data flag: 1 byte (1 if response.data exists, 0 otherwise)
+          5. (if data flag == 1) an embedded ChatMessage (with its full framing)
+        """
+        header_type = self.MESSAGE_TYPES["server_response"].to_bytes(1, "big")
+        print(f"[DEBUG] Serializing ServerResponse with header byte: {header_type.hex()}")
+        payload = b""
+        # 1. status
+        status_val = 0 if response.status == Status.SUCCESS else 1
+        payload += struct.pack('!B', status_val)
+        print(f"[DEBUG] Serialized response status: {response.status} as {status_val}")
+        # 2. message
+        payload += self.serialize_string(response.message)
+        # 3. unread_count
+        unread = response.unread_count if response.unread_count is not None else 0
+        payload += struct.pack('!I', unread)
+        print(f"[DEBUG] Serialized unread_count: {unread}")
+        # 4. data flag and embedded ChatMessage if present.
+        if response.data is not None:
+            payload += struct.pack('!B', 1)
+            chat_bytes = self.serialize_message(response.data)
+            print(f"[DEBUG] Serialized embedded ChatMessage of length {len(chat_bytes)} bytes")
+            payload += chat_bytes
+        else:
+            payload += struct.pack('!B', 0)
+            print(f"[DEBUG] No embedded ChatMessage in response.")
+
+        length_bytes = len(payload).to_bytes(4, "big")
+        final_response = header_type + length_bytes + payload
+        print(f"[DEBUG] Final serialized response length: {len(final_response)} bytes")
+        return final_response
 
     def deserialize_response(self, data: bytes) -> ServerResponse:
-        # Placeholder for custom binary format
-        # TODO: Implement efficient binary deserialization
-        payload = data[5:]  # Skip type and length
-        return ServerResponse.model_validate_json(payload.decode())
+        """
+        Deserialize a ServerResponse from data.
+        Expects: [1 byte: type][4 bytes: payload length][payload]
+        """
+        print(f"[DEBUG] Deserializing ServerResponse from data length: {len(data)} bytes")
+        offset = 5  # Skip header.
+        # 1. status
+        status_val = struct.unpack_from('!B', data, offset)[0]
+        offset += 1
+        status = Status.SUCCESS if status_val == 0 else Status.ERROR
+        print(f"[DEBUG] Deserialized response status: {status} (raw value: {status_val})")
+        # 2. message
+        message, offset = self.deserialize_string(data, offset)
+        # 3. unread_count
+        unread = struct.unpack_from('!I', data, offset)[0]
+        offset += 4
+        print(f"[DEBUG] Deserialized unread_count: {unread}")
+        # 4. data flag
+        flag = struct.unpack_from('!B', data, offset)[0]
+        offset += 1
+        chat_data = None
+        if flag == 1:
+            # The remaining bytes should contain a full ChatMessage.
+            embedded, _ = self.extract_message(data[offset:])
+            if embedded is not None:
+                chat_data = self.deserialize_message(embedded)
+                print(f"[DEBUG] Deserialized embedded ChatMessage.")
+            else:
+                print(f"[DEBUG] Data flag set but unable to extract embedded ChatMessage.")
+        else:
+            print(f"[DEBUG] No embedded ChatMessage in response.")
 
+        return ServerResponse(
+            status=status,
+            message=message,
+            unread_count=unread if unread != 0 else None,
+            data=chat_data
+        )
+
+    # --- Framing and extraction ---
     def frame_message(self, data: bytes) -> bytes:
-        # No additional framing needed as we use length prefix
+        """
+        Each message is already framed as:
+          [1 byte: type][4 bytes: payload length][payload]
+        So simply return the data.
+        """
+        print(f"[DEBUG] Framing message: total length {len(data)} bytes")
         return data
 
-    def extract_message(self, buffer: bytes) -> tuple[Optional[bytes], bytes]:
-        if len(buffer) < 5:  # Need at least type and length
+    def extract_message(self, buffer: bytes) -> Tuple[Optional[bytes], bytes]:
+        """
+        Extract a complete message from the buffer.
+        Returns (message_data or None, remaining_buffer).
+        """
+        if len(buffer) < 5:
+            print("[DEBUG] Buffer too short to extract header.")
             return None, buffer
-
-        msg_length = int.from_bytes(buffer[1:5], "big")
-        total_length = msg_length + 5
-
+        payload_length = int.from_bytes(buffer[1:5], "big")
+        total_length = 1 + 4 + payload_length
         if len(buffer) < total_length:
+            print(f"[DEBUG] Buffer incomplete: expected {total_length} bytes, have {len(buffer)} bytes.")
             return None, buffer
-
+        print(f"[DEBUG] Extracted message of total length {total_length} bytes from buffer.")
         return buffer[:total_length], buffer[total_length:]
 
 
