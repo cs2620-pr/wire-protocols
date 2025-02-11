@@ -4,7 +4,7 @@ import time
 import sys
 from queue import Queue, Empty
 from typing import Tuple, Optional, List, Set
-from schemas import ChatMessage, MessageType, ServerResponse, Status
+from schemas import OldServerResponse, MessageType, ServerResponseContainer, Status
 from protocol import Protocol, ProtocolFactory
 
 
@@ -62,7 +62,7 @@ class ChatClient:
                 continue
 
             password = input("Enter password: ")
-            message = ChatMessage(
+            message = OldServerResponse(
                 username=self.username,
                 content="",
                 message_type=(
@@ -90,14 +90,16 @@ class ChatClient:
                     return False
 
                 response = self.protocol.deserialize_response(message_data)
-                print(response.message)
+                print(response.error_message)
 
                 if response.status == Status.SUCCESS:
                     if action == "register":
                         # If registration successful, prompt for login
                         continue
                     return True
-                elif action == "login" and "already logged in" in response.message:
+                elif (
+                    action == "login" and "already logged in" in response.error_message
+                ):
                     return False
             except Exception as e:
                 print(f"Authentication error: {e}")
@@ -136,7 +138,7 @@ class ChatClient:
         if cmd == "quit":
             self.message_queue.put(("quit", None))
         elif cmd == "logout":
-            logout_message = ChatMessage(
+            logout_message = OldServerResponse(
                 username=self.username,
                 content="",
                 message_type=MessageType.LOGOUT,
@@ -170,7 +172,7 @@ class ChatClient:
 
     def fetch_messages(self, count: int = 10):
         """Request unread messages from the server"""
-        fetch_message = ChatMessage(
+        fetch_message = OldServerResponse(
             username=self.username,
             content="",
             message_type=MessageType.FETCH,
@@ -184,7 +186,7 @@ class ChatClient:
             print("No messages to mark as read")
             return
 
-        mark_read_message = ChatMessage(
+        mark_read_message = OldServerResponse(
             username=self.username,
             content="",
             message_type=MessageType.MARK_READ,
@@ -196,7 +198,7 @@ class ChatClient:
 
     def delete_messages(self, message_ids: List[int]):
         """Delete specified messages"""
-        delete_message = ChatMessage(
+        delete_message = OldServerResponse(
             username=self.username,
             content="",
             message_type=MessageType.DELETE,
@@ -205,7 +207,7 @@ class ChatClient:
         if self.send_message(delete_message):
             print("Delete request sent")
 
-    def send_message(self, message: ChatMessage) -> bool:
+    def send_message(self, message: OldServerResponse) -> bool:
         if not self.connected:
             return False
 
@@ -231,7 +233,7 @@ class ChatClient:
                 print("Invalid format. Use: username;message")
                 return True  # Return True to keep the client running
 
-            message = ChatMessage(
+            message = OldServerResponse(
                 username=self.username,
                 content=message_content,
                 message_type=MessageType.DM,
@@ -239,7 +241,7 @@ class ChatClient:
             )
         else:
             # Regular chat message
-            message = ChatMessage(
+            message = OldServerResponse(
                 username=self.username, content=content, message_type=MessageType.CHAT
             )
 
@@ -264,14 +266,14 @@ class ChatClient:
 
                     response = self.protocol.deserialize_response(message_data)
                     if response.status == Status.ERROR:
-                        print(f"Error: {response.message}")
-                        if "not logged in" in response.message.lower():
+                        print(f"Error: {response.error_message}")
+                        if "not logged in" in response.error_message.lower():
                             self.disconnect()
                             break
                         continue
 
                     if response.data is None:
-                        print(response.message)
+                        print(response.error_message)
                         continue
 
                     if isinstance(response.data, list):
@@ -298,7 +300,7 @@ class ChatClient:
 
         try:
             # Send leave message before disconnecting
-            leave_message = ChatMessage(
+            leave_message = OldServerResponse(
                 username=self.username,
                 content=f"{self.username} has left the chat",
                 message_type=MessageType.LEAVE,

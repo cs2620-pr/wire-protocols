@@ -587,8 +587,8 @@ class ChatWindow(QMainWindow):
             )
             self.update_user_list(current_all_users, active_users)
 
-        elif message.message_type == MessageType.LEAVE:
-            # For leave messages, keep the user in the list but mark as inactive
+        elif message.message_type == MessageType.LOGOUT:
+            # For logout messages, keep the user in the list but mark as inactive
             current_all_users = []
             for i in range(self.user_list.count()):
                 item = self.user_list.item(i)
@@ -597,7 +597,7 @@ class ChatWindow(QMainWindow):
                 )  # Remove status emoji and unread count
                 current_all_users.append(username)
 
-            # Get current active users and remove the leaving user
+            # Get current active users and remove the logging out user
             current_active_users = []
             for i in range(self.user_list.count()):
                 item = self.user_list.item(i)
@@ -605,7 +605,9 @@ class ChatWindow(QMainWindow):
                     username = (
                         item.text().split(" ", 1)[1].split(" (")[0]
                     )  # Remove status emoji and unread count
-                    if username != message.username:  # Don't include the leaving user
+                    if (
+                        username != message.username
+                    ):  # Don't include the logging out user
                         current_active_users.append(username)
 
             # Use server's active_users list if provided, otherwise use our current list
@@ -716,11 +718,15 @@ class ChatWindow(QMainWindow):
             # Handle system messages
             is_system_message = (
                 message_obj.message_type
-                in [MessageType.JOIN, MessageType.LEAVE, MessageType.DELETE_ACCOUNT]
+                in [MessageType.JOIN, MessageType.LOGOUT, MessageType.DELETE_ACCOUNT]
                 or message_obj.username == "System"
             )
 
             if is_system_message:
+                # Skip blank system messages
+                if not message.strip() or message.strip() == "System:":
+                    return
+
                 # Add timestamp to system message
                 timestamp = message_obj.timestamp.strftime("%H:%M:%S")
                 html = f"""
@@ -826,8 +832,8 @@ class ChatWindow(QMainWindow):
                         self.unread_counts[sender] = message_obj.unread_count
                         self.update_user_list_item(sender)
 
-            elif message_obj.message_type not in [MessageType.JOIN, MessageType.LEAVE]:
-                # Display system messages except JOIN/LEAVE messages
+            elif message_obj.message_type not in [MessageType.JOIN, MessageType.LOGOUT]:
+                # Display system messages except JOIN/LOGOUT messages
                 html = f"""
                     <div style="text-align: center; margin: 10px 0;">
                         <span style="color: #888888; font-style: italic;">
@@ -999,12 +1005,12 @@ class ChatClient:
 
         self.connected = False
         try:
-            leave_message = ChatMessage(
+            logout_message = ChatMessage(
                 username=self.username,
                 content=f"{self.username} has left the chat",
-                message_type=MessageType.LEAVE,
+                message_type=MessageType.LOGOUT,
             )
-            data = self.protocol.serialize_message(leave_message)
+            data = self.protocol.serialize_message(logout_message)
             framed_data = self.protocol.frame_message(data)
             self.client_socket.send(framed_data)
         except Exception:

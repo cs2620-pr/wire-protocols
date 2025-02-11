@@ -1,6 +1,7 @@
 import socket
 import threading
 import json
+import traceback
 from typing import Dict, List, Set, Optional
 from schemas import ChatMessage, ServerResponse, MessageType, Status, SystemMessage
 from protocol import Protocol, ProtocolFactory
@@ -447,15 +448,16 @@ class ChatServer:
 
         except Exception as e:
             print(f"Error handling client: {e}")
+            traceback.print_exc()
         finally:
             if username:
                 print(f"Removing client {username}")
-                self.remove_client(client_socket, send_leave_message=True)
+                self.remove_client(client_socket, send_logout_message=True)
             else:
-                self.remove_client(client_socket, send_leave_message=False)
+                self.remove_client(client_socket, send_logout_message=False)
 
     def remove_client(
-        self, client_socket: socket.socket, send_leave_message: bool = True
+        self, client_socket: socket.socket, send_logout_message: bool = True
     ):
         username = None
         with self.lock:
@@ -467,14 +469,14 @@ class ChatServer:
                 if client_socket in self.client_buffers:
                     del self.client_buffers[client_socket]
 
-        if username and send_leave_message:
-            leave_message = ChatMessage(
+        if username and send_logout_message:
+            logout_message = ChatMessage(
                 username=username,
-                content=SystemMessage.USER_LEFT.format(username),
-                message_type=MessageType.LEAVE,
+                content=SystemMessage.USER_LOGGED_OUT.format(username),
+                message_type=MessageType.LOGOUT,
             )
-            self.send_to_recipients(leave_message, exclude_socket=client_socket)
-            print(f"Broadcasting that {username} has left")
+            self.send_to_recipients(logout_message, exclude_socket=client_socket)
+            print(f"Broadcasting that {username} has logged out")
 
         try:
             client_socket.shutdown(socket.SHUT_RDWR)

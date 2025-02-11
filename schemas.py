@@ -5,15 +5,18 @@ from datetime import datetime
 
 
 class MessageType(str, Enum):
-    JOIN = "join"
-    LEAVE = "leave"
-    CHAT = "chat"
+    SERVER_RESPONSE = "server_response"
+
     LOGIN = "login"
-    REGISTER = "register"
     LOGOUT = "logout"
+    JOIN = "join"
+    REGISTER = "register"
+
+    CHAT = "chat"
     DM = "dm"
     FETCH = "fetch"
     MARK_READ = "mark_read"
+
     DELETE = "delete"
     DELETE_NOTIFICATION = "delete_notification"
     DELETE_ACCOUNT = "delete_account"
@@ -51,7 +54,7 @@ class SystemMessage(str, Enum):
 
     # Chat messages
     USER_JOINED = "{} has joined the chat"
-    USER_LEFT = "{} has left the chat"
+    USER_LOGGED_OUT = "{} has logged out"
     MESSAGES_DELETED = "Deleted {} message(s)"
     UNREAD_MESSAGES = "You have {} unread messages"
 

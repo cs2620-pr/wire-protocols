@@ -2,6 +2,108 @@
 
 **Pranav Ramesh, Mohammmed Zidan Cassim**
 
+## 02/11
+
+### Update 1
+
+Custom Wire Protocol Implementation and System Message Handling:
+
+1. Custom Binary Protocol Design:
+   - Implemented `CustomWireProtocol` class with efficient binary message format
+   - Message Structure:
+     ```
+     [1 byte: message type][4 bytes: payload length][payload]
+     ```
+   - Message Types:
+     * Dynamically assigned based on MessageType enum order (0x00-0x0B)
+     * Ensures extensibility for new message types
+     * Maintains consistent mapping across client/server
+
+2. Message Framing and Extraction:
+   - Added robust message extraction with safety checks:
+     ```python
+     def extract_message(self, buffer: bytes) -> Tuple[Optional[bytes], bytes]:
+         if len(buffer) < 5:  # Minimum header size
+             return None, buffer
+         
+         # Validate message type
+         msg_type = buffer[0]
+         if msg_type not in self.REVERSE_MESSAGE_TYPES:
+             return None, buffer[1:]  # Skip invalid byte
+         
+         # Extract and validate payload length
+         payload_length = int.from_bytes(buffer[1:5], "big")
+         if payload_length > 1_000_000:  # 1MB limit
+             return None, buffer[5:]
+     ```
+   - Benefits:
+     * Prevents buffer overflow attacks
+     * Handles corrupted messages gracefully
+     * Maintains protocol integrity
+
+3. String Serialization:
+   - Implemented length-prefixed string encoding:
+     ```python
+     def serialize_string(self, s: str) -> bytes:
+         encoded = s.encode("utf-8")
+         length = len(encoded)
+         return struct.pack("!H", length) + encoded
+     ```
+   - Advantages:
+     * Efficient storage of variable-length strings
+     * UTF-8 support for international characters
+     * Clear message boundaries
+
+4. System Message Improvements:
+   - Enhanced system message handling:
+     * Skip empty system messages
+     * Proper timestamp display
+     * Consistent formatting
+   - Fixed issues with:
+     * Blank message display
+     * System message clutter
+     * Message synchronization
+
+5. Technical Challenges:
+   - Message Corruption:
+     * Added validation for message type byte
+     * Implemented maximum message size limit
+     * Enhanced error recovery
+   - Buffer Management:
+     * Proper handling of incomplete messages
+     * Efficient buffer cleanup
+     * Memory usage optimization
+
+6. Design Decisions:
+   - Binary Protocol:
+     * Chose fixed-size headers for easy parsing
+     * Used big-endian byte order for network consistency
+     * Implemented dynamic message type mapping
+   - Safety Features:
+     * 1MB message size limit to prevent DoS
+     * Message type validation
+     * Proper error handling
+   - Debug Support:
+     * Added extensive debug logging
+     * Clear error messages
+     * Protocol state tracking
+
+7. Future Considerations:
+   - Protocol Versioning:
+     * Could add version byte to header
+     * Backward compatibility support
+     * Protocol negotiation
+   - Compression:
+     * Optional payload compression
+     * Adaptive compression based on size
+     * Protocol-level compression flags
+   - Error Recovery:
+     * Enhanced error correction
+     * Automatic retry mechanisms
+     * Connection recovery
+
+These changes have significantly improved the reliability and efficiency of the chat system while maintaining security and extensibility.
+
 ## 02/10
 
 ### Update 2

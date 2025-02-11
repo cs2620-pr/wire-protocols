@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 import json
-from typing import Optional
-from schemas import ChatMessage, ServerResponse
+from typing import Optional, Tuple
+from schemas import ChatMessage, ServerResponse, MessageType, Status
 
 
 class Protocol(ABC):
@@ -69,58 +69,58 @@ from typing import Optional, Tuple
 from schemas import ChatMessage, ServerResponse, MessageType, Status
 from protocol import Protocol
 
+
 class CustomWireProtocol(Protocol):
     """
     Custom binary wire protocol implementation.
-    
+
     Overall frame:
       [1 byte: message type][4 bytes: payload length][payload]
-      
-    Message Types (header byte values):
-      0x01: chat         (default for ChatMessage)
-      0x02: server_response
-      0x03: login
-      0x04: register
-      0x05: dm
-      0x06: fetch
-      0x07: mark_read
-      0x08: delete
-      0x09: delete_notification
-      0x0A: delete_account
-      0x0B: leave
-      0x0C: join
-    """
-    MESSAGE_TYPES = {
-        "chat": 0x01,
-        "server_response": 0x02,
-        "login": 0x03,
-        "register": 0x04,
-        "dm": 0x05,
-        "fetch": 0x06,
-        "mark_read": 0x07,
-        "delete": 0x08,
-        "delete_notification": 0x09,
-        "delete_account": 0x0A,
-        "leave": 0x0B,
-        "join": 0x0C,
-    }
-    # Reverse mapping for deserialization.
-    REVERSE_MESSAGE_TYPES = {v: k for k, v in MESSAGE_TYPES.items()}
 
-    # --- Helper methods for encoding/decoding strings ---
+    Message Types (header byte values, dynamically assigned based on MessageType enum order):
+      0x00: MessageType.SERVER_RESPONSE
+      0x01: MessageType.LOGIN
+      0x02: MessageType.LOGOUT
+      0x03: MessageType.JOIN
+      0x04: MessageType.REGISTER
+      0x05: MessageType.CHAT
+      0x06: MessageType.DM
+      0x07: MessageType.FETCH
+      0x08: MessageType.MARK_READ
+      0x09: MessageType.DELETE
+      0x0A: MessageType.DELETE_NOTIFICATION
+      0x0B: MessageType.DELETE_ACCOUNT
+    """
+
+    def __init__(self):
+        super().__init__()
+        # Create mapping from message type value (lowercase) to hex byte value
+        self.MESSAGE_TYPES = {
+            message_type.value.lower(): i for i, message_type in enumerate(MessageType)
+        }
+        # Create reverse mapping for deserialization (hex byte value to message type)
+        self.REVERSE_MESSAGE_TYPES = {v: k for k, v in self.MESSAGE_TYPES.items()}
+        # Log the actual message type mappings for debugging
+        print("[DEBUG] Initialized message type mappings:")
+        for msg_type, hex_val in self.MESSAGE_TYPES.items():
+            print(f"[DEBUG]   {hex_val}: {msg_type}")
+
     def serialize_string(self, s: str) -> bytes:
         """Serialize a string as: [2 bytes: length][N bytes: UTF-8 data]"""
-        encoded = s.encode('utf-8')
-        print(f"[DEBUG] Serializing string: '{s}' with length {len(encoded)}")
-        return struct.pack('!H', len(encoded)) + encoded
+        encoded = s.encode("utf-8")
+        length = len(encoded)
+        print(f"[DEBUG] Serializing string: length={length}, content='{s}'")
+        return struct.pack("!H", length) + encoded
 
     def deserialize_string(self, data: bytes, offset: int) -> Tuple[str, int]:
         """Deserialize a length-prefixed string from offset.
-           Returns (decoded_string, new_offset)."""
-        length = struct.unpack_from('!H', data, offset)[0]
+        Returns (decoded_string, new_offset)."""
+        length = struct.unpack_from("!H", data, offset)[0]
         offset += 2
-        s = data[offset:offset+length].decode('utf-8')
-        print(f"[DEBUG] Deserialized string: '{s}' with length {length} at offset {offset-2}")
+        s = data[offset : offset + length].decode("utf-8")
+        print(
+            f"[DEBUG] Deserialized string: offset={offset-2}, length={length}, content='{s}'"
+        )
         offset += length
         return s, offset
 
@@ -128,6 +128,9 @@ class CustomWireProtocol(Protocol):
     def serialize_message(self, message: ChatMessage) -> bytes:
         """
         Serialize a ChatMessage into our custom binary format.
+        The header includes (in order):
+          1. message_type: 1 byte
+          2. payload_length: 4 bytes
         The payload includes (in order):
           1. message_id: 4 bytes (0 means None)
           2. username: length-prefixed string
@@ -139,18 +142,22 @@ class CustomWireProtocol(Protocol):
           8. active_users: 1 byte count, then each as a length-prefixed string
           9. unread_count: 4 bytes (0 if not set)
         """
-        # Use the enum’s value (a lowercase string) for header type.
+        # Use the enum's value (a lowercase string) for header type.
         msg_type_key = message.message_type.value.lower()
         if msg_type_key not in self.MESSAGE_TYPES:
-            print(f"[DEBUG] Unknown message type '{msg_type_key}', defaulting to 'chat'.")
-            msg_type_key = "chat"
+            print(
+                f"[DEBUG] Unknown message type '{msg_type_key}', defaulting to 'chat'."
+            )
+            msg_type_key = MessageType.CHAT.value.lower()
         header_type = self.MESSAGE_TYPES[msg_type_key].to_bytes(1, "big")
-        print(f"[DEBUG] Serializing message of type '{message.message_type.value}' as header byte: {header_type.hex()}")
+        print(
+            f"[DEBUG] Serializing message of type '{message.message_type.value}' as header byte: {header_type.hex()}"
+        )
 
         payload = b""
         # 1. message_id
         msg_id = message.message_id if message.message_id is not None else 0
-        payload += struct.pack('!I', msg_id)
+        payload += struct.pack("!I", msg_id)
         print(f"[DEBUG] Serialized message_id: {msg_id}")
         # 2. username
         payload += self.serialize_string(message.username)
@@ -158,17 +165,17 @@ class CustomWireProtocol(Protocol):
         payload += self.serialize_string(message.content)
         # 4. timestamp
         ts = message.timestamp.timestamp()
-        payload += struct.pack('!d', ts)
+        payload += struct.pack("!d", ts)
         print(f"[DEBUG] Serialized timestamp: {ts} (from {message.timestamp})")
         # 5. recipients
         recipients = message.recipients if message.recipients else []
-        payload += struct.pack('!B', len(recipients))
+        payload += struct.pack("!B", len(recipients))
         print(f"[DEBUG] Serialized {len(recipients)} recipient(s).")
         for recipient in recipients:
             payload += self.serialize_string(recipient)
         # 6. fetch_count
         fetch_count = message.fetch_count if message.fetch_count is not None else 0
-        payload += struct.pack('!I', fetch_count)
+        payload += struct.pack("!I", fetch_count)
         print(f"[DEBUG] Serialized fetch_count: {fetch_count}")
         # 7. password
         password_str = message.password if message.password is not None else ""
@@ -176,13 +183,13 @@ class CustomWireProtocol(Protocol):
         print(f"[DEBUG] Serialized password: '{password_str}'")
         # 8. active_users
         active_users = message.active_users if message.active_users else []
-        payload += struct.pack('!B', len(active_users))
+        payload += struct.pack("!B", len(active_users))
         print(f"[DEBUG] Serialized {len(active_users)} active user(s).")
         for user in active_users:
             payload += self.serialize_string(user)
         # 9. unread_count
         unread = message.unread_count if message.unread_count is not None else 0
-        payload += struct.pack('!I', unread)
+        payload += struct.pack("!I", unread)
         print(f"[DEBUG] Serialized unread_count: {unread}")
 
         payload_length = len(payload)
@@ -198,11 +205,15 @@ class CustomWireProtocol(Protocol):
         Expects: [1 byte: type][4 bytes: payload length][payload]
         """
         header_type = data[0]
-        msg_type_str = self.REVERSE_MESSAGE_TYPES.get(header_type, "chat")
-        print(f"[DEBUG] Deserializing message with header byte: {header_type:#04x} mapped to type '{msg_type_str}'")
+        msg_type_str = self.REVERSE_MESSAGE_TYPES.get(
+            header_type, MessageType.CHAT.value.lower()
+        )
+        print(
+            f"[DEBUG] Deserializing message with header byte: {header_type:#04x} mapped to type '{msg_type_str}'"
+        )
         offset = 5  # Skip header.
         # 1. message_id
-        msg_id = struct.unpack_from('!I', data, offset)[0]
+        msg_id = struct.unpack_from("!I", data, offset)[0]
         offset += 4
         print(f"[DEBUG] Deserialized message_id: {msg_id}")
         # 2. username
@@ -210,12 +221,12 @@ class CustomWireProtocol(Protocol):
         # 3. content
         content, offset = self.deserialize_string(data, offset)
         # 4. timestamp
-        ts = struct.unpack_from('!d', data, offset)[0]
+        ts = struct.unpack_from("!d", data, offset)[0]
         offset += 8
         timestamp = datetime.fromtimestamp(ts)
         print(f"[DEBUG] Deserialized timestamp: {ts} -> {timestamp}")
         # 5. recipients
-        rec_count = struct.unpack_from('!B', data, offset)[0]
+        rec_count = struct.unpack_from("!B", data, offset)[0]
         offset += 1
         print(f"[DEBUG] Deserialized recipient count: {rec_count}")
         recipients = []
@@ -223,14 +234,14 @@ class CustomWireProtocol(Protocol):
             rec, offset = self.deserialize_string(data, offset)
             recipients.append(rec)
         # 6. fetch_count
-        fetch_count = struct.unpack_from('!I', data, offset)[0]
+        fetch_count = struct.unpack_from("!I", data, offset)[0]
         offset += 4
         print(f"[DEBUG] Deserialized fetch_count: {fetch_count}")
         # 7. password
         password, offset = self.deserialize_string(data, offset)
         print(f"[DEBUG] Deserialized password: '{password}'")
         # 8. active_users
-        active_count = struct.unpack_from('!B', data, offset)[0]
+        active_count = struct.unpack_from("!B", data, offset)[0]
         offset += 1
         print(f"[DEBUG] Deserialized active user count: {active_count}")
         active_users = []
@@ -238,7 +249,7 @@ class CustomWireProtocol(Protocol):
             user, offset = self.deserialize_string(data, offset)
             active_users.append(user)
         # 9. unread_count
-        unread = struct.unpack_from('!I', data, offset)[0]
+        unread = struct.unpack_from("!I", data, offset)[0]
         offset += 4
         print(f"[DEBUG] Deserialized unread_count: {unread}")
 
@@ -259,7 +270,7 @@ class CustomWireProtocol(Protocol):
     def serialize_response(self, response: ServerResponse) -> bytes:
         """
         Serialize a ServerResponse.
-        
+
         Payload fields (in order):
           1. status: 1 byte (0 for SUCCESS, 1 for ERROR)
           2. message: length-prefixed string
@@ -268,26 +279,30 @@ class CustomWireProtocol(Protocol):
           5. (if data flag == 1) an embedded ChatMessage (with its full framing)
         """
         header_type = self.MESSAGE_TYPES["server_response"].to_bytes(1, "big")
-        print(f"[DEBUG] Serializing ServerResponse with header byte: {header_type.hex()}")
+        print(
+            f"[DEBUG] Serializing ServerResponse with header byte: {header_type.hex()}"
+        )
         payload = b""
         # 1. status
         status_val = 0 if response.status == Status.SUCCESS else 1
-        payload += struct.pack('!B', status_val)
+        payload += struct.pack("!B", status_val)
         print(f"[DEBUG] Serialized response status: {response.status} as {status_val}")
         # 2. message
         payload += self.serialize_string(response.message)
         # 3. unread_count
         unread = response.unread_count if response.unread_count is not None else 0
-        payload += struct.pack('!I', unread)
+        payload += struct.pack("!I", unread)
         print(f"[DEBUG] Serialized unread_count: {unread}")
         # 4. data flag and embedded ChatMessage if present.
         if response.data is not None:
-            payload += struct.pack('!B', 1)
+            payload += struct.pack("!B", 1)
             chat_bytes = self.serialize_message(response.data)
-            print(f"[DEBUG] Serialized embedded ChatMessage of length {len(chat_bytes)} bytes")
+            print(
+                f"[DEBUG] Serialized embedded ChatMessage of length {len(chat_bytes)} bytes"
+            )
             payload += chat_bytes
         else:
-            payload += struct.pack('!B', 0)
+            payload += struct.pack("!B", 0)
             print(f"[DEBUG] No embedded ChatMessage in response.")
 
         length_bytes = len(payload).to_bytes(4, "big")
@@ -300,21 +315,25 @@ class CustomWireProtocol(Protocol):
         Deserialize a ServerResponse from data.
         Expects: [1 byte: type][4 bytes: payload length][payload]
         """
-        print(f"[DEBUG] Deserializing ServerResponse from data length: {len(data)} bytes")
+        print(
+            f"[DEBUG] Deserializing ServerResponse from data length: {len(data)} bytes"
+        )
         offset = 5  # Skip header.
         # 1. status
-        status_val = struct.unpack_from('!B', data, offset)[0]
+        status_val = struct.unpack_from("!B", data, offset)[0]
         offset += 1
         status = Status.SUCCESS if status_val == 0 else Status.ERROR
-        print(f"[DEBUG] Deserialized response status: {status} (raw value: {status_val})")
+        print(
+            f"[DEBUG] Deserialized response status: {status} (raw value: {status_val})"
+        )
         # 2. message
         message, offset = self.deserialize_string(data, offset)
         # 3. unread_count
-        unread = struct.unpack_from('!I', data, offset)[0]
+        unread = struct.unpack_from("!I", data, offset)[0]
         offset += 4
         print(f"[DEBUG] Deserialized unread_count: {unread}")
         # 4. data flag
-        flag = struct.unpack_from('!B', data, offset)[0]
+        flag = struct.unpack_from("!B", data, offset)[0]
         offset += 1
         chat_data = None
         if flag == 1:
@@ -324,7 +343,9 @@ class CustomWireProtocol(Protocol):
                 chat_data = self.deserialize_message(embedded)
                 print(f"[DEBUG] Deserialized embedded ChatMessage.")
             else:
-                print(f"[DEBUG] Data flag set but unable to extract embedded ChatMessage.")
+                print(
+                    f"[DEBUG] Data flag set but unable to extract embedded ChatMessage."
+                )
         else:
             print(f"[DEBUG] No embedded ChatMessage in response.")
 
@@ -332,7 +353,7 @@ class CustomWireProtocol(Protocol):
             status=status,
             message=message,
             unread_count=unread if unread != 0 else None,
-            data=chat_data
+            data=chat_data,
         )
 
     # --- Framing and extraction ---
@@ -351,14 +372,33 @@ class CustomWireProtocol(Protocol):
         Returns (message_data or None, remaining_buffer).
         """
         if len(buffer) < 5:
-            print("[DEBUG] Buffer too short to extract header.")
+            print(f"[DEBUG] Buffer too short to extract header: {len(buffer)} bytes.")
             return None, buffer
+        else:
+            print(f"[DEBUG] Buffer length: {len(buffer)} bytes.")
+
+        # Validate message type byte
+        msg_type = buffer[0]
+        if msg_type not in self.REVERSE_MESSAGE_TYPES:
+            print(f"[DEBUG] Invalid message type byte: {msg_type}")
+            return None, buffer[1:]  # Skip the invalid byte
+
+        # Extract and validate payload length
         payload_length = int.from_bytes(buffer[1:5], "big")
+        if payload_length > 1_000_000:  # 1MB max message size
+            print(f"[DEBUG] Invalid payload length: {payload_length} bytes")
+            return None, buffer[5:]  # Skip the header
+
         total_length = 1 + 4 + payload_length
         if len(buffer) < total_length:
-            print(f"[DEBUG] Buffer incomplete: expected {total_length} bytes, have {len(buffer)} bytes.")
+            print(
+                f"[DEBUG] Buffer incomplete: expected {total_length} bytes, have {len(buffer)} bytes."
+            )
             return None, buffer
-        print(f"[DEBUG] Extracted message of total length {total_length} bytes from buffer.")
+
+        print(
+            f"[DEBUG] Extracted message of total length {total_length} bytes from buffer."
+        )
         return buffer[:total_length], buffer[total_length:]
 
 
@@ -373,9 +413,3 @@ class ProtocolFactory:
             return CustomWireProtocol()
         else:
             raise ValueError(f"Unknown protocol type: {protocol_type}")
-
-
-# Example usage:
-# protocol = ProtocolFactory.create("json")  # or "custom"
-# client = ChatClient(username, protocol=protocol)
-# server = ChatServer(protocol=protocol)
