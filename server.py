@@ -1,3 +1,10 @@
+"""A multi-threaded chat server implementation supporting multiple protocols and persistent storage.
+
+This module provides a flexible chat server that can handle multiple concurrent client connections,
+supports different wire protocols, and persists chat data in a SQLite database. The server supports
+features like direct messaging, message fetching, read receipts, and account management.
+"""
+
 import socket
 import threading
 import json
@@ -10,6 +17,29 @@ import argparse
 
 
 class ChatServer:
+    """A multi-threaded chat server that handles client connections and message routing.
+
+    This class implements a chat server that can:
+    - Accept and manage multiple client connections
+    - Handle user authentication and registration
+    - Route messages between clients
+    - Support direct messaging and message history
+    - Manage user sessions and connection states
+    - Persist messages and user data in a database
+
+    Attributes:
+        host (str): The hostname to bind the server to
+        port (int): The port number to listen on
+        server_socket (socket.socket): The main server socket for accepting connections
+        clients (Dict[socket.socket, str]): Maps client sockets to usernames
+        usernames (Dict[str, socket.socket]): Maps usernames to client sockets
+        lock (threading.Lock): Thread synchronization lock
+        running (bool): Server running state flag
+        protocol (Protocol): The wire protocol implementation to use
+        client_buffers (Dict[socket.socket, bytes]): Buffers for incomplete messages
+        db_path (str): Path to the SQLite database file
+    """
+
     def __init__(
         self,
         protocol: Optional[Protocol] = None,
@@ -17,6 +47,14 @@ class ChatServer:
         port: int = 8000,
         db_path: str = "chat.db",
     ):
+        """Initialize the chat server with the specified configuration.
+
+        Args:
+            protocol: The wire protocol to use for message serialization/deserialization
+            host: The hostname to bind the server to
+            port: The port number to listen on
+            db_path: Path to the SQLite database file
+        """
         self.host = host
         self.port = port
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -30,9 +68,19 @@ class ChatServer:
         self.db_path = db_path
 
     def db(self):
+        """Get a new database connection instance.
+
+        Returns:
+            Database: A new database connection for thread-safe operations
+        """
         return Database(self.db_path)
 
     def start(self):
+        """Start the chat server and begin accepting client connections.
+
+        This method runs in an infinite loop until shutdown is requested. For each new
+        client connection, it spawns a new thread to handle that client's communication.
+        """
         try:
             self.server_socket.bind((self.host, self.port))
             self.server_socket.listen(5)
@@ -64,6 +112,16 @@ class ChatServer:
         message: ChatMessage,
         unread_count: Optional[int] = None,
     ) -> bool:
+        """Send a message to a specific client.
+
+        Args:
+            client_socket: The socket connection to the client
+            message: The chat message to send
+            unread_count: Optional count of unread messages to include
+
+        Returns:
+            bool: True if message was sent successfully, False otherwise
+        """
         try:
             response = ServerResponse(
                 status=Status.SUCCESS,
@@ -79,7 +137,18 @@ class ChatServer:
             return False
 
     def handle_dm(self, message: ChatMessage, sender_socket: socket.socket) -> None:
-        """Handle direct message, storing and delivering as appropriate"""
+        """Handle direct message, storing and delivering as appropriate.
+
+        Args:
+            message: The direct message to handle
+            sender_socket: The socket of the sending client
+
+        The function:
+        1. Validates the recipient exists
+        2. Stores the message in the database
+        3. Delivers to recipient if online
+        4. Sends confirmation back to sender
+        """
         if not message.recipients:
             return
 
@@ -108,7 +177,16 @@ class ChatServer:
     def handle_fetch_request(
         self, message: ChatMessage, client_socket: socket.socket
     ) -> None:
-        """Handle request to fetch messages"""
+        """Handle a request to fetch messages from history.
+
+        Args:
+            message: The fetch request message containing parameters
+            client_socket: The requesting client's socket
+
+        The function handles two types of fetches:
+        1. Messages between two specific users
+        2. Unread messages for a single user
+        """
         if not message.fetch_count:
             message.fetch_count = 10  # Default limit
 
@@ -137,7 +215,15 @@ class ChatServer:
                     db.mark_delivered(msg.message_id)
 
     def handle_mark_read(self, message: ChatMessage) -> None:
-        """Handle request to mark messages as read"""
+        """Handle a request to mark messages as read.
+
+        Args:
+            message: The mark read request containing either:
+                    - A recipient username to mark all messages from them as read
+                    - A list of specific message IDs to mark as read
+
+        The function updates the read status and sends updated unread counts.
+        """
         db = self.db()
         if message.recipients:
             # Mark all messages from the specified user as read
@@ -169,7 +255,17 @@ class ChatServer:
                 self.send_to_client(self.usernames[message.username], notification)
 
     def handle_delete_messages(self, message: ChatMessage) -> None:
-        """Handle request to delete messages"""
+        """Handle a request to delete messages.
+
+        Args:
+            message: The delete request containing message IDs and recipient
+
+        The function:
+        1. Deletes the specified messages
+        2. Tracks which messages were unread
+        3. Notifies affected users about the deletion
+        4. Updates unread counts for affected users
+        """
         db = self.db()
         if (
             message.message_ids and message.recipients
@@ -211,7 +307,17 @@ class ChatServer:
                     self.send_to_client(self.usernames[user], notification)
 
     def send_to_recipients(self, message: ChatMessage, exclude_socket=None):
-        """Send message to specific recipients or broadcast if no recipients specified"""
+        """Send a message to specified recipients or broadcast to all clients.
+
+        Args:
+            message: The message to send
+            exclude_socket: Optional socket to exclude from receiving the message
+
+        The function handles both targeted messages and broadcasts:
+        1. For DMs, it uses handle_dm()
+        2. For specific recipients, it sends only to those users
+        3. For broadcasts, it sends to all connected clients except excluded
+        """
         if message.message_type == MessageType.DM:
             self.handle_dm(message, exclude_socket)
             return
@@ -247,7 +353,16 @@ class ChatServer:
                     ).start()
 
     def validate_username(self, username: str) -> tuple[bool, str]:
-        """Validate username format. Returns (is_valid, error_message)"""
+        """Validate the format of a username.
+
+        Args:
+            username: The username to validate
+
+        Returns:
+            tuple: (is_valid, error_message)
+            - is_valid: True if username is valid, False otherwise
+            - error_message: Empty string if valid, error description if invalid
+        """
         if not username:
             return False, SystemMessage.USERNAME_REQUIRED
         if len(username) < 2:
@@ -257,17 +372,31 @@ class ChatServer:
         return True, ""
 
     def handle_client(self, client_socket: socket.socket):
+        """Handle all communication with a connected client.
+
+        Args:
+            client_socket: The socket connection to the client
+
+        This is the main client handling loop that:
+        1. Handles authentication/registration
+        2. Processes incoming messages
+        3. Routes messages to appropriate handlers
+        4. Manages client disconnection
+        """
         username = None
         db = self.db()
         try:
             while self.running:
+                # Receive data from client
                 data = client_socket.recv(1024)
                 if not data:
                     break
 
+                # Accumulate received data in buffer
                 self.client_buffers[client_socket] += data
 
                 while True:
+                    # Extract complete messages from buffer
                     message_data, self.client_buffers[client_socket] = (
                         self.protocol.extract_message(
                             self.client_buffers[client_socket]
@@ -278,6 +407,7 @@ class ChatServer:
 
                     message = self.protocol.deserialize_message(message_data)
 
+                    # Handle unauthenticated state
                     if username is None:
                         # First message should be login or register
                         if message.message_type not in [
@@ -295,7 +425,7 @@ class ChatServer:
                             return
 
                         if message.message_type == MessageType.REGISTER:
-                            # Validate username format
+                            # Handle registration request
                             is_valid, error_message = self.validate_username(
                                 message.username
                             )
@@ -356,6 +486,7 @@ class ChatServer:
                                 continue  # Keep connection open, allow retry
 
                         elif message.message_type == MessageType.LOGIN:
+                            # Handle login request
                             if not message.password:
                                 error_response = ServerResponse(
                                     status=Status.ERROR,
@@ -390,6 +521,7 @@ class ChatServer:
                                 client_socket.send(framed_data)
                                 return
 
+                            # Login successful, setup client state
                             username = message.username
                             with self.lock:
                                 self.clients[client_socket] = username
@@ -435,6 +567,7 @@ class ChatServer:
                                 self.send_to_client(client_socket, notification)
                             continue
 
+                    # Handle authenticated state messages
                     if message.message_type == MessageType.LOGOUT:
                         print(f"Client {username} logged out")
                         break
@@ -498,6 +631,17 @@ class ChatServer:
     def remove_client(
         self, client_socket: socket.socket, send_logout_message: bool = True
     ):
+        """Remove a client from the server and clean up their resources.
+
+        Args:
+            client_socket: The socket connection to remove
+            send_logout_message: Whether to broadcast a logout notification
+
+        This function:
+        1. Removes client from internal tracking
+        2. Optionally broadcasts logout message
+        3. Closes the client socket
+        """
         username = None
         with self.lock:
             if client_socket in self.clients:
@@ -527,7 +671,13 @@ class ChatServer:
             pass
 
     def shutdown(self):
-        """Shutdown the server and close all client connections"""
+        """Gracefully shut down the server.
+
+        This function:
+        1. Sets the running flag to False
+        2. Closes all client connections
+        3. Closes the server socket
+        """
         self.running = False
 
         # First close all client sockets
@@ -551,7 +701,12 @@ class ChatServer:
         print("Server shutdown complete")
 
     def send_error(self, client_socket: socket.socket, error_message: str) -> None:
-        """Send an error response to a client"""
+        """Send an error response to a client.
+
+        Args:
+            client_socket: The socket connection to send the error to
+            error_message: The error message to send
+        """
         error_response = ServerResponse(
             status=Status.ERROR,
             message=error_message,
@@ -563,6 +718,7 @@ class ChatServer:
 
 
 if __name__ == "__main__":
+    # Parse command line arguments
     parser = argparse.ArgumentParser(description="Start the chat server")
     parser.add_argument("--host", default="localhost", help="Host address to bind to")
     parser.add_argument("--port", type=int, default=8000, help="Port to listen on")
@@ -580,6 +736,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    # Create and start the server
     protocol = ProtocolFactory.create(args.protocol)
     server = ChatServer(
         protocol=protocol, host=args.host, port=args.port, db_path=args.db_path

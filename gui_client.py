@@ -1,3 +1,15 @@
+"""A PyQt5-based GUI client for the chat application.
+
+This module provides a graphical user interface for the chat client, featuring:
+- User authentication (login/registration)
+- Real-time messaging
+- Direct messaging support
+- Message history and unread message tracking
+- User presence indicators
+- Message deletion and account management
+- Theme support (light/dark mode)
+"""
+
 import sys
 from PyQt5.QtWidgets import (
     QApplication,
@@ -29,7 +41,25 @@ import argparse
 
 
 class LoginDialog(QDialog):
+    """Dialog for user login and registration.
+
+    This dialog handles both login and registration operations, collecting
+    username and password from the user and providing appropriate feedback.
+
+    Attributes:
+        username_input (QLineEdit): Input field for username
+        password_input (QLineEdit): Input field for password
+        login_button (QPushButton): Button to trigger login
+        register_button (QPushButton): Button to trigger registration
+        selected_action (str): Stores whether user chose login or register
+    """
+
     def __init__(self, parent=None):
+        """Initialize the login dialog with input fields and buttons.
+
+        Args:
+            parent: Parent widget (optional)
+        """
         super().__init__(parent)
         self.setWindowTitle("Chat Login")
         self.setModal(True)
@@ -65,14 +95,21 @@ class LoginDialog(QDialog):
         self.selected_action = None
 
     def handle_login(self):
+        """Handle login button click."""
         self.selected_action = "login"
         self.accept()
 
     def handle_register(self):
+        """Handle register button click."""
         self.selected_action = "register"
         self.accept()
 
     def get_credentials(self):
+        """Get the entered credentials and selected action.
+
+        Returns:
+            tuple: (username, password, action)
+        """
         return (
             self.username_input.text(),
             self.password_input.text(),
@@ -80,18 +117,36 @@ class LoginDialog(QDialog):
         )
 
     def reject(self):
-        QApplication.instance().quit()  # Exit the program when dialog is rejected (X button clicked)
+        """Handle dialog rejection (X button click) by exiting the application."""
+        QApplication.instance().quit()
 
 
 class ReceiveThread(QThread):
-    message_received = pyqtSignal(str, object)  # Signal now includes the message object
+    """Background thread for receiving messages from the server.
+
+    This thread continuously listens for incoming messages and emits signals
+    when messages are received or when the connection is lost.
+
+    Attributes:
+        message_received (pyqtSignal): Signal emitted when a message is received
+        connection_lost (pyqtSignal): Signal emitted when connection is lost
+        client (ChatClient): Reference to the chat client instance
+    """
+
+    message_received = pyqtSignal(str, object)  # Signal includes the message object
     connection_lost = pyqtSignal()
 
     def __init__(self, client):
+        """Initialize the receive thread.
+
+        Args:
+            client: ChatClient instance to receive messages from
+        """
         super().__init__()
         self.client = client
 
     def run(self):
+        """Main thread loop for receiving and processing messages."""
         while self.client.connected:
             try:
                 data = self.client.client_socket.recv(1024)
@@ -140,19 +195,45 @@ class ReceiveThread(QThread):
 
 
 class ChatWindow(QMainWindow):
+    """Main chat window interface.
+
+    This class implements the main chat interface, handling:
+    - Message display and sending
+    - User list management
+    - Chat history
+    - Message deletion
+    - Account management
+    - Theme management
+
+    Attributes:
+        client (ChatClient): The chat client instance
+        receive_thread (ReceiveThread): Thread for receiving messages
+        current_chat_user (str): Currently selected chat user
+        unread_counts (dict): Tracks unread message counts per user
+        active_users (set): Set of currently active users
+    """
+
     def __init__(
         self, host: str = "localhost", port: int = 8000, protocol: str = "json"
     ):
+        """Initialize the chat window.
+
+        Args:
+            host: Server hostname
+            port: Server port number
+            protocol: Protocol type to use ("json" or "custom")
+        """
         super().__init__()
         self.client: ChatClient | None = None
         self.receive_thread: ReceiveThread | None = None
-        self.system_message_display: QTextEdit | None = None  # Initialize the attribute
+        self.system_message_display: QTextEdit | None = None
         self.server_host = host
         self.server_port = port
         self.protocol_type = protocol
         self.init_ui()
 
     def init_ui(self):
+        """Initialize the user interface components and layout."""
         self.setWindowTitle("Chat Client")
         self.setGeometry(100, 100, 1000, 600)  # Made window wider for user list
 
@@ -257,7 +338,11 @@ class ChatWindow(QMainWindow):
         self.show_login_dialog()
 
     def set_ui_enabled(self, enabled: bool):
-        """Enable or disable UI elements based on connection status"""
+        """Enable or disable UI elements based on connection status.
+
+        Args:
+            enabled: Whether to enable or disable the UI elements
+        """
         self.message_input.setEnabled(enabled)
         self.send_button.setEnabled(enabled)
         self.delete_button.setEnabled(enabled)
@@ -266,6 +351,7 @@ class ChatWindow(QMainWindow):
         self.user_list.setEnabled(enabled)
 
     def show_login_dialog(self):
+        """Show the login dialog and handle the result."""
         dialog = LoginDialog(self)
         if dialog.exec_() == QDialog.Accepted:
             username, password, action = dialog.get_credentials()
@@ -281,6 +367,16 @@ class ChatWindow(QMainWindow):
             self.close()  # This will trigger closeEvent which exits the app
 
     def connect_to_server(self, username: str, password: str, action: str) -> bool:
+        """Connect to the chat server and authenticate.
+
+        Args:
+            username: User's username
+            password: User's password
+            action: Either "login" or "register"
+
+        Returns:
+            bool: True if connection and authentication successful
+        """
         self.client = ChatClient(
             username,
             protocol=ProtocolFactory.create(self.protocol_type),
@@ -340,7 +436,7 @@ class ChatWindow(QMainWindow):
         return True
 
     def update_theme(self):
-        """Update the chat display theme based on system colors"""
+        """Update the chat display theme based on system colors."""
         palette = self.palette()
         is_dark = palette.color(palette.Window).lightness() < 128
 
@@ -375,7 +471,13 @@ class ChatWindow(QMainWindow):
         )
 
     def display_message(self, sender: str, content: str, msg_id: Optional[str] = None):
-        """Display a message with colored sender name followed by content"""
+        """Display a message in the chat window.
+
+        Args:
+            sender: Username of message sender
+            content: Message content
+            msg_id: Optional message ID for reference
+        """
         if not self.client:
             return
 
@@ -407,6 +509,7 @@ class ChatWindow(QMainWindow):
         self.chat_display.append(html)
 
     def send_message(self):
+        """Send a message to the current chat user."""
         if not self.client or not self.client.connected or not self.current_chat_user:
             return
 
@@ -425,6 +528,7 @@ class ChatWindow(QMainWindow):
         self.message_input.clear()
 
     def fetch_messages(self):
+        """Fetch message history from the server."""
         if not self.client or not self.client.connected:
             return
 
@@ -432,12 +536,14 @@ class ChatWindow(QMainWindow):
         self.client.fetch_messages(count)
 
     def mark_messages_read(self):
+        """Mark messages as read for the current chat."""
         if not self.client or not self.client.connected:
             return
 
         self.client.mark_messages_read()
 
     def delete_messages(self):
+        """Delete selected messages from the current chat."""
         if not self.client or not self.client.connected or not self.current_chat_user:
             QMessageBox.warning(self, "Error", "Please select a chat first")
             return
@@ -457,6 +563,7 @@ class ChatWindow(QMainWindow):
                 QMessageBox.warning(self, "Error", SystemMessage.INVALID_MESSAGE_IDS)
 
     def logout(self):
+        """Handle user logout and cleanup."""
         if not self.client or not self.client.connected:
             return
 
@@ -498,6 +605,7 @@ class ChatWindow(QMainWindow):
         self.show()
 
     def handle_disconnection(self):
+        """Handle server disconnection events."""
         # If this is a voluntary disconnect (logout), don't do anything
         if (
             hasattr(self.client, "is_voluntary_disconnect")
@@ -516,13 +624,19 @@ class ChatWindow(QMainWindow):
         QApplication.instance().quit()
 
     def closeEvent(self, event):
+        """Handle window close event."""
         if self.client and self.client.connected:
             self.client.disconnect()
         event.accept()
         QApplication.instance().quit()
 
     def update_user_list(self, all_users: List[str], active_users: List[str]):
-        """Update the user list display"""
+        """Update the user list display with online/offline status.
+
+        Args:
+            all_users: List of all registered users
+            active_users: List of currently active users
+        """
         if not self.client:
             return
 
@@ -546,7 +660,11 @@ class ChatWindow(QMainWindow):
             self.user_list.addItem(text)
 
     def handle_server_message(self, message: ChatMessage):
-        """Handle server messages including user list updates"""
+        """Handle incoming server messages and update UI accordingly.
+
+        Args:
+            message: The received chat message
+        """
         if (
             message.message_type == MessageType.LOGIN
             and message.recipients
@@ -617,7 +735,11 @@ class ChatWindow(QMainWindow):
             self.update_user_list(current_all_users, active_users)
 
     def on_user_clicked(self, item):
-        """Handle user selection from the list"""
+        """Handle user selection from the user list.
+
+        Args:
+            item: The selected user list item
+        """
         # Extract username from the list item text (remove status emoji and unread count)
         username = item.text().split(" ", 1)[1].split(" (")[0]
 
@@ -639,7 +761,11 @@ class ChatWindow(QMainWindow):
             self.update_user_list_item(username)
 
     def load_chat_history(self, username: str):
-        """Load chat history for a specific user"""
+        """Load chat history for a specific user.
+
+        Args:
+            username: The user to load chat history for
+        """
         if not self.client:
             return
 
@@ -666,7 +792,11 @@ class ChatWindow(QMainWindow):
         self.client.send_message(mark_read_message)
 
     def update_user_list_item(self, username: str):
-        """Update the display of a user in the list"""
+        """Update the display of a user in the list.
+
+        Args:
+            username: The username to update in the list
+        """
         for i in range(self.user_list.count()):
             item = self.user_list.item(i)
             if username in item.text():
@@ -679,7 +809,7 @@ class ChatWindow(QMainWindow):
                 break
 
     def delete_account(self):
-        """Handle account deletion with confirmation"""
+        """Handle account deletion with confirmation."""
         reply = QMessageBox.question(
             self,
             "Delete Account",
@@ -708,7 +838,12 @@ class ChatWindow(QMainWindow):
                 self.show_login_dialog()
 
     def handle_message(self, message: str, message_obj: Optional[ChatMessage] = None):
-        """Handle incoming messages and update UI accordingly"""
+        """Handle incoming messages and update UI accordingly.
+
+        Args:
+            message: The message text
+            message_obj: Optional ChatMessage object containing additional data
+        """
         if not self.client:
             return
 
@@ -856,6 +991,24 @@ class ChatWindow(QMainWindow):
 
 
 class ChatClient:
+    """Client for connecting to and communicating with the chat server.
+
+    This class handles:
+    - Server connection and authentication
+    - Message sending and receiving
+    - Protocol handling
+    - Connection state management
+
+    Attributes:
+        username (str): Client's username
+        host (str): Server hostname
+        port (int): Server port number
+        connected (bool): Connection state
+        protocol (Protocol): Protocol implementation
+        unread_messages (Set[int]): Set of unread message IDs
+        is_voluntary_disconnect (bool): Whether disconnect was user-initiated
+    """
+
     def __init__(
         self,
         username: str,
@@ -863,6 +1016,14 @@ class ChatClient:
         host: str = "localhost",
         port: int = 8000,
     ):
+        """Initialize the chat client.
+
+        Args:
+            username: Client's username
+            protocol: Protocol implementation to use
+            host: Server hostname
+            port: Server port number
+        """
         self.username = username
         self.host = host
         self.port = port
@@ -872,9 +1033,14 @@ class ChatClient:
         self.protocol = protocol or ProtocolFactory.create("json")
         self.receive_buffer = b""
         self.unread_messages: Set[int] = set()
-        self.is_voluntary_disconnect = False  # Add flag for voluntary disconnects
+        self.is_voluntary_disconnect = False
 
     def connect(self) -> bool:
+        """Connect to the chat server.
+
+        Returns:
+            bool: True if connection successful
+        """
         try:
             self.client_socket.connect((self.host, self.port))
             self.connected = True
@@ -884,6 +1050,15 @@ class ChatClient:
             return False
 
     def authenticate(self, password: str, action: str) -> bool:
+        """Authenticate with the server.
+
+        Args:
+            password: User's password
+            action: Either "login" or "register"
+
+        Returns:
+            bool: True if authentication successful
+        """
         message = ChatMessage(
             username=self.username,
             content="",
@@ -931,6 +1106,14 @@ class ChatClient:
         return False
 
     def send_message(self, message: ChatMessage) -> bool:
+        """Send a message to the server.
+
+        Args:
+            message: The message to send
+
+        Returns:
+            bool: True if message sent successfully
+        """
         if not self.connected:
             return False
 
@@ -946,6 +1129,14 @@ class ChatClient:
             return False
 
     def send_chat_message(self, content: str) -> bool:
+        """Send a chat message or direct message.
+
+        Args:
+            content: Message content (may include recipient prefix)
+
+        Returns:
+            bool: True if message sent successfully
+        """
         if ";" in content:
             recipient, message_content = content.split(";", 1)
             recipient = recipient.strip()
@@ -968,6 +1159,11 @@ class ChatClient:
         return self.send_message(message)
 
     def fetch_messages(self, count: int = 10):
+        """Request message history from the server.
+
+        Args:
+            count: Number of messages to fetch
+        """
         fetch_message = ChatMessage(
             username=self.username,
             content="",
@@ -977,6 +1173,7 @@ class ChatClient:
         self.send_message(fetch_message)
 
     def mark_messages_read(self):
+        """Mark unread messages as read."""
         if not self.unread_messages:
             return
 
@@ -990,6 +1187,12 @@ class ChatClient:
             self.unread_messages.clear()
 
     def delete_messages(self, message_ids: List[int], recipient: str):
+        """Delete specific messages.
+
+        Args:
+            message_ids: List of message IDs to delete
+            recipient: Username of the message recipient
+        """
         delete_message = ChatMessage(
             username=self.username,
             content="",
@@ -1000,6 +1203,7 @@ class ChatClient:
         self.send_message(delete_message)
 
     def disconnect(self):
+        """Disconnect from the server and cleanup."""
         if not self.connected:
             return
 
@@ -1024,6 +1228,7 @@ class ChatClient:
 
 
 def main():
+    """Main entry point for the GUI client application."""
     parser = argparse.ArgumentParser(description="Start the chat client")
     parser.add_argument("--host", default="localhost", help="Server host address")
     parser.add_argument("--port", type=int, default=8000, help="Server port")

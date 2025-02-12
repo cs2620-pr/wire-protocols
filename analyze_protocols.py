@@ -71,20 +71,6 @@ def analyze_protocol_metrics(log_file_path):
     return stats
 
 
-def plot_protocol_comparison(stats):
-    protocols = list(stats.keys())
-    avg_sizes = [stats[p]["avg_message_size"] for p in protocols]
-
-    plt.figure(figsize=(10, 6))
-    plt.bar(protocols, avg_sizes)
-    plt.title("Average Message Size by Protocol")
-    plt.ylabel("Bytes")
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    plt.savefig("protocol_comparison.png")
-    plt.close()
-
-
 def generate_markdown_report(stats):
     markdown = "# Protocol Efficiency Analysis\n\n"
 
@@ -166,7 +152,6 @@ def generate_markdown_report(stats):
 def main():
     log_file_path = "logs/protocol_metrics.log"
     stats = analyze_protocol_metrics(log_file_path)
-    plot_protocol_comparison(stats)
 
     # Generate and save the report
     report = generate_markdown_report(stats)
