@@ -1033,8 +1033,18 @@ def main():
         choices=["json", "custom"],
         help="Protocol type to use",
     )
+    parser.add_argument(
+        "--enable-logging",
+        action="store_true",
+        help="Enable protocol metrics logging",
+    )
 
     args = parser.parse_args()
+
+    # Configure protocol logging based on argument
+    from protocol import configure_protocol_logging
+
+    configure_protocol_logging(enabled=args.enable_logging)
 
     app = QApplication(sys.argv[1:])  # Skip the argparse arguments
     window = ChatWindow(host=args.host, port=args.port, protocol=args.protocol)

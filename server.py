@@ -15,6 +15,7 @@ class ChatServer:
         protocol: Optional[Protocol] = None,
         host: str = "localhost",
         port: int = 8000,
+        db_path: str = "chat.db",
     ):
         self.host = host
         self.port = port
@@ -26,7 +27,10 @@ class ChatServer:
         self.running = True
         self.protocol = protocol or ProtocolFactory.create("json")
         self.client_buffers: Dict[socket.socket, bytes] = {}
-        self.db = Database()
+        self.db_path = db_path
+
+    def db(self):
+        return Database(self.db_path)
 
     def start(self):
         try:
@@ -79,16 +83,23 @@ class ChatServer:
         if not message.recipients:
             return
 
+        db = self.db()
+
+        # Validate recipient exists
+        recipient = message.recipients[0]
+        if not db.user_exists(recipient):
+            self.send_error(sender_socket, f"User '{recipient}' does not exist")
+            return
+
         # Store the message
-        message_id = self.db.store_message(message)
+        message_id = db.store_message(message)
         message.message_id = message_id
 
         # Send to recipient if they're online
-        recipient = message.recipients[0]
         if recipient in self.usernames:
             recipient_socket = self.usernames[recipient]
             if self.send_to_client(recipient_socket, message):
-                self.db.mark_delivered(message_id)
+                db.mark_delivered(message_id)
 
         # Also send back to sender so they see their own message with the ID
         if message.username in self.usernames:
@@ -101,36 +112,39 @@ class ChatServer:
         if not message.fetch_count:
             message.fetch_count = 10  # Default limit
 
+        db = self.db()
+
         # If recipients list has two users, fetch messages between them
         if message.recipients and len(message.recipients) == 2:
             user1, user2 = message.recipients
             # Get messages where either user is sender and other is recipient
-            messages = self.db.get_messages_between_users(
+            messages = db.get_messages_between_users(
                 user1=user1, user2=user2, limit=message.fetch_count
             )
         else:
             # Get unread messages for single user
-            messages = self.db.get_unread_messages(
+            messages = db.get_unread_messages(
                 recipient=message.username, limit=message.fetch_count
             )
 
         # Get total unread count for progress tracking
-        total_unread = self.db.get_unread_count(message.username)
+        total_unread = db.get_unread_count(message.username)
 
         # Send each message and mark as delivered if successful
         for msg in messages:
             if self.send_to_client(client_socket, msg, unread_count=total_unread):
                 if msg.message_id is not None:
-                    self.db.mark_delivered(msg.message_id)
+                    db.mark_delivered(msg.message_id)
 
     def handle_mark_read(self, message: ChatMessage) -> None:
         """Handle request to mark messages as read"""
+        db = self.db()
         if message.recipients:
             # Mark all messages from the specified user as read
-            self.db.mark_read_from_user(message.username, message.recipients[0])
+            db.mark_read_from_user(message.username, message.recipients[0])
 
             # Send updated unread count to the user
-            unread_count = self.db.get_unread_count(message.username)
+            unread_count = db.get_unread_count(message.username)
             if message.username in self.usernames:
                 notification = ChatMessage(
                     username="System",
@@ -141,10 +155,10 @@ class ChatServer:
                 self.send_to_client(self.usernames[message.username], notification)
         elif message.message_ids:
             # Mark specific messages as read
-            self.db.mark_read(message.message_ids, message.username)
+            db.mark_read(message.message_ids, message.username)
 
             # Send updated unread count to the user
-            unread_count = self.db.get_unread_count(message.username)
+            unread_count = db.get_unread_count(message.username)
             if message.username in self.usernames:
                 notification = ChatMessage(
                     username="System",
@@ -156,10 +170,11 @@ class ChatServer:
 
     def handle_delete_messages(self, message: ChatMessage) -> None:
         """Handle request to delete messages"""
+        db = self.db()
         if (
             message.message_ids and message.recipients
         ):  # Ensure we have both message IDs and recipient
-            deleted_count, deleted_info = self.db.delete_messages(
+            deleted_count, deleted_info = db.delete_messages(
                 message.message_ids, message.username, message.recipients[0]
             )
 
@@ -231,8 +246,19 @@ class ChatServer:
                         daemon=True,
                     ).start()
 
+    def validate_username(self, username: str) -> tuple[bool, str]:
+        """Validate username format. Returns (is_valid, error_message)"""
+        if not username:
+            return False, SystemMessage.USERNAME_REQUIRED
+        if len(username) < 2:
+            return False, SystemMessage.USERNAME_TOO_SHORT
+        if not username.replace("_", "").isalnum():
+            return False, SystemMessage.INVALID_USERNAME
+        return True, ""
+
     def handle_client(self, client_socket: socket.socket):
         username = None
+        db = self.db()
         try:
             while self.running:
                 data = client_socket.recv(1024)
@@ -269,7 +295,22 @@ class ChatServer:
                             return
 
                         if message.message_type == MessageType.REGISTER:
-                            if self.db.user_exists(message.username):
+                            # Validate username format
+                            is_valid, error_message = self.validate_username(
+                                message.username
+                            )
+                            if not is_valid:
+                                error_response = ServerResponse(
+                                    status=Status.ERROR,
+                                    message=error_message,
+                                    data=None,
+                                )
+                                data = self.protocol.serialize_response(error_response)
+                                framed_data = self.protocol.frame_message(data)
+                                client_socket.send(framed_data)
+                                continue  # Keep connection open, allow retry
+
+                            if db.user_exists(message.username):
                                 error_response = ServerResponse(
                                     status=Status.ERROR,
                                     message=SystemMessage.USER_EXISTS,
@@ -278,7 +319,7 @@ class ChatServer:
                                 data = self.protocol.serialize_response(error_response)
                                 framed_data = self.protocol.frame_message(data)
                                 client_socket.send(framed_data)
-                                return
+                                continue  # Keep connection open, allow retry
 
                             if not message.password:
                                 error_response = ServerResponse(
@@ -289,9 +330,9 @@ class ChatServer:
                                 data = self.protocol.serialize_response(error_response)
                                 framed_data = self.protocol.frame_message(data)
                                 client_socket.send(framed_data)
-                                return
+                                continue  # Keep connection open, allow retry
 
-                            if self.db.create_user(message.username, message.password):
+                            if db.create_user(message.username, message.password):
                                 success_response = ServerResponse(
                                     status=Status.SUCCESS,
                                     message=SystemMessage.REGISTRATION_SUCCESS,
@@ -302,7 +343,7 @@ class ChatServer:
                                 )
                                 framed_data = self.protocol.frame_message(data)
                                 client_socket.send(framed_data)
-                                return
+                                continue  # Keep connection open for login
                             else:
                                 error_response = ServerResponse(
                                     status=Status.ERROR,
@@ -312,7 +353,7 @@ class ChatServer:
                                 data = self.protocol.serialize_response(error_response)
                                 framed_data = self.protocol.frame_message(data)
                                 client_socket.send(framed_data)
-                                return
+                                continue  # Keep connection open, allow retry
 
                         elif message.message_type == MessageType.LOGIN:
                             if not message.password:
@@ -326,9 +367,7 @@ class ChatServer:
                                 client_socket.send(framed_data)
                                 return
 
-                            if not self.db.verify_user(
-                                message.username, message.password
-                            ):
+                            if not db.verify_user(message.username, message.password):
                                 error_response = ServerResponse(
                                     status=Status.ERROR,
                                     message=SystemMessage.INVALID_CREDENTIALS,
@@ -366,7 +405,7 @@ class ChatServer:
                             print(f"Client {username} joined the chat")
 
                             # Send success response with user list
-                            all_users = self.db.get_all_users()
+                            all_users = db.get_all_users()
                             active_users = list(self.usernames.keys())
                             success_response = ServerResponse(
                                 status=Status.SUCCESS,
@@ -384,7 +423,7 @@ class ChatServer:
                             client_socket.send(framed_data)
 
                             # Check for unread messages
-                            unread_count = self.db.get_unread_count(username)
+                            unread_count = db.get_unread_count(username)
                             if unread_count > 0:
                                 notification = ChatMessage(
                                     username="System",
@@ -415,7 +454,7 @@ class ChatServer:
                         if username is None:
                             continue
 
-                        if self.db.delete_user(username):
+                        if db.delete_user(username):
                             # Notify all users about the account deletion
                             notification = ChatMessage(
                                 username="System",
@@ -428,7 +467,7 @@ class ChatServer:
                             self.send_to_recipients(notification)
 
                             # Send updated user list to all remaining users
-                            all_users = self.db.get_all_users()
+                            all_users = db.get_all_users()
                             active_users = [
                                 u for u in self.usernames.keys() if u != username
                             ]
@@ -488,13 +527,18 @@ class ChatServer:
             pass
 
     def shutdown(self):
+        """Shutdown the server and close all client connections"""
         self.running = False
+
+        # First close all client sockets
         with self.lock:
             clients_to_remove = list(self.clients.keys())
 
+        # Let remove_client handle the socket shutdown/close
         for client_socket in clients_to_remove:
             self.remove_client(client_socket)
 
+        # Then close the server socket
         try:
             self.server_socket.shutdown(socket.SHUT_RDWR)
         except:
@@ -503,7 +547,19 @@ class ChatServer:
             self.server_socket.close()
         except:
             pass
+
         print("Server shutdown complete")
+
+    def send_error(self, client_socket: socket.socket, error_message: str) -> None:
+        """Send an error response to a client"""
+        error_response = ServerResponse(
+            status=Status.ERROR,
+            message=error_message,
+            data=None,
+        )
+        data = self.protocol.serialize_response(error_response)
+        framed_data = self.protocol.frame_message(data)
+        client_socket.send(framed_data)
 
 
 if __name__ == "__main__":
@@ -516,11 +572,18 @@ if __name__ == "__main__":
         choices=["json", "custom"],
         help="Protocol type to use",
     )
+    parser.add_argument(
+        "--db-path",
+        default="chat.db",
+        help="Path to the SQLite database file",
+    )
 
     args = parser.parse_args()
 
     protocol = ProtocolFactory.create(args.protocol)
-    server = ChatServer(protocol=protocol, host=args.host, port=args.port)
+    server = ChatServer(
+        protocol=protocol, host=args.host, port=args.port, db_path=args.db_path
+    )
     try:
         server.start()
     except KeyboardInterrupt:
