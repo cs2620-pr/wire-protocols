@@ -2,6 +2,27 @@
 
 **Pranav Ramesh, Mohammmed Zidan Cassim**
 
+## 02/12
+
+### Update 1
+
+Protocol Analysis Results:
+
+We've implemented a comprehensive protocol analysis tool (`analyze_protocols.py`) that measures and compares the efficiency of our JSON and Custom Wire protocols. The analysis shows that:
+
+1. **Message Size Comparison**:
+   - CustomWireProtocol averages 53.8 bytes per message
+   - JSONProtocol averages 238.0 bytes per message
+   - JSONProtocol messages are 342.2% larger than CustomWireProtocol
+
+2. **Bandwidth Impact**:
+   - At 1000 messages/second:
+     * CustomWireProtocol: 184.8 MB/hour
+     * JSONProtocol: 817.1 MB/hour
+   - Significant bandwidth savings with CustomWireProtocol
+
+For detailed analysis and complete metrics, refer to `protocol_analysis.md` in the repository.
+
 ## 02/11
 
 ### Update 4
@@ -909,22 +930,3 @@ Key features implemented:
 ## 02/04
 
 We implemented basic chat/server + GUI. But then realized that my implementation makes the client poll for messages, while the whole point of sockets is for the server to distribute realtime updates to the clients. Will need to redesign this.
-
-### Update 5
-
-Protocol Analysis Results:
-
-We've implemented a comprehensive protocol analysis tool (`analyze_protocols.py`) that measures and compares the efficiency of our JSON and Custom Wire protocols. The analysis shows that:
-
-1. **Message Size Comparison**:
-   - CustomWireProtocol averages 53.8 bytes per message
-   - JSONProtocol averages 238.0 bytes per message
-   - JSONProtocol messages are 342.2% larger than CustomWireProtocol
-
-2. **Bandwidth Impact**:
-   - At 1000 messages/second:
-     * CustomWireProtocol: 184.8 MB/hour
-     * JSONProtocol: 817.1 MB/hour
-   - Significant bandwidth savings with CustomWireProtocol
-
-For detailed analysis and complete metrics, refer to `protocol_analysis.md` in the repository.
