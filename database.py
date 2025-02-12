@@ -1,3 +1,13 @@
+"""SQLite database implementation for the chat application.
+
+This module provides persistent storage for chat messages and user data using SQLite.
+It handles:
+- User account management (creation, authentication, deletion)
+- Message storage and retrieval
+- Message status tracking (read/unread, delivered)
+- Chat history management
+"""
+
 import sqlite3
 from datetime import datetime
 from typing import List, Optional, Tuple
@@ -6,17 +16,49 @@ import bcrypt
 
 
 def adapt_datetime(dt: datetime) -> str:
-    """Convert datetime to string for SQLite storage"""
+    """Convert datetime object to ISO format string for SQLite storage.
+
+    Args:
+        dt: The datetime object to convert
+
+    Returns:
+        str: ISO format string representation of the datetime
+    """
     return dt.isoformat()
 
 
 def convert_datetime(val: bytes) -> datetime:
-    """Convert SQLite datetime string back to datetime object"""
+    """Convert SQLite datetime string back to datetime object.
+
+    Args:
+        val: Bytes containing the ISO format datetime string
+
+    Returns:
+        datetime: The parsed datetime object
+    """
     return datetime.fromisoformat(val.decode())
 
 
 class Database:
+    """SQLite database manager for the chat application.
+
+    This class handles all database operations including:
+    - User management (registration, authentication)
+    - Message storage and retrieval
+    - Message status tracking
+    - Chat history management
+
+    Attributes:
+        db_path (str): Path to the SQLite database file
+        conn (sqlite3.Connection): Database connection
+    """
+
     def __init__(self, db_path: str = "chat.db"):
+        """Initialize database connection and schema.
+
+        Args:
+            db_path: Path to the SQLite database file
+        """
         self.db_path = db_path
         # Register datetime adapter and converter
         sqlite3.register_adapter(datetime, adapt_datetime)
@@ -28,11 +70,18 @@ class Database:
         self.init_db()
 
     def __del__(self):
+        """Close database connection on object destruction."""
         if getattr(self, "conn", None):
             self.conn.close()
 
     def init_db(self):
-        """Initialize the database schema"""
+        """Initialize the database schema.
+
+        Creates the following tables if they don't exist:
+        - users: Stores user accounts and credentials
+        - messages: Stores chat messages and their metadata
+        Also creates necessary indices for efficient querying.
+        """
         cursor = self.conn.cursor()
 
         # Create users table with explicit TIMESTAMP type
@@ -64,7 +113,7 @@ class Database:
         """
         )
 
-        # Create indices
+        # Create indices for efficient querying
         cursor.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_recipient_status 
@@ -81,7 +130,17 @@ class Database:
         self.conn.commit()
 
     def create_user(self, username: str, password: str) -> bool:
-        """Create a new user. Returns True if successful, False if username exists"""
+        """Create a new user account.
+
+        Args:
+            username: The username for the new account
+            password: The password for the new account
+
+        Returns:
+            bool: True if user was created successfully, False if username exists
+
+        The password is hashed using bcrypt before storage.
+        """
         try:
             cursor = self.conn.cursor()
             # Hash the password with bcrypt
@@ -96,7 +155,15 @@ class Database:
             return False  # Username already exists
 
     def verify_user(self, username: str, password: str) -> bool:
-        """Verify user credentials. Returns True if valid."""
+        """Verify user credentials.
+
+        Args:
+            username: The username to verify
+            password: The password to verify
+
+        Returns:
+            bool: True if credentials are valid, False otherwise
+        """
         cursor = self.conn.cursor()
         cursor.execute(
             "SELECT password_hash FROM users WHERE username = ?", (username,)
@@ -108,13 +175,30 @@ class Database:
         return bcrypt.checkpw(password.encode(), stored_hash)
 
     def user_exists(self, username: str) -> bool:
-        """Check if a user exists"""
+        """Check if a user exists.
+
+        Args:
+            username: The username to check
+
+        Returns:
+            bool: True if user exists, False otherwise
+        """
         cursor = self.conn.cursor()
         cursor.execute("SELECT 1 FROM users WHERE username = ?", (username,))
         return cursor.fetchone() is not None
 
     def store_message(self, message: ChatMessage) -> int:
-        """Store a message and return its ID"""
+        """Store a chat message in the database.
+
+        Args:
+            message: The ChatMessage to store
+
+        Returns:
+            int: The ID of the stored message
+
+        Raises:
+            RuntimeError: If message ID generation fails
+        """
         cursor = self.conn.cursor()
         cursor.execute(
             """
@@ -141,7 +225,15 @@ class Database:
     def get_unread_messages(
         self, recipient: str, limit: Optional[int] = None
     ) -> List[ChatMessage]:
-        """Get unread messages for a recipient"""
+        """Get unread messages for a recipient.
+
+        Args:
+            recipient: Username of the message recipient
+            limit: Maximum number of messages to return
+
+        Returns:
+            List[ChatMessage]: List of unread messages
+        """
         cursor = self.conn.cursor()
 
         query = """
@@ -172,7 +264,11 @@ class Database:
         return messages
 
     def mark_delivered(self, message_id: int):
-        """Mark a message as delivered"""
+        """Mark a message as delivered.
+
+        Args:
+            message_id: ID of the message to mark as delivered
+        """
         cursor = self.conn.cursor()
         cursor.execute(
             """
@@ -185,7 +281,12 @@ class Database:
         self.conn.commit()
 
     def mark_read(self, message_ids: List[int], username: str) -> None:
-        """Mark messages as read for a specific user"""
+        """Mark specific messages as read for a user.
+
+        Args:
+            message_ids: List of message IDs to mark as read
+            username: Username of the message recipient
+        """
         cursor = self.conn.cursor()
         cursor.execute(
             """
@@ -200,7 +301,12 @@ class Database:
         self.conn.commit()
 
     def mark_read_from_user(self, recipient: str, sender: str) -> None:
-        """Mark all messages from a specific user as read"""
+        """Mark all messages from a specific user as read.
+
+        Args:
+            recipient: Username of the message recipient
+            sender: Username of the message sender
+        """
         cursor = self.conn.cursor()
         cursor.execute(
             """
@@ -213,7 +319,14 @@ class Database:
         self.conn.commit()
 
     def get_unread_count(self, recipient: str) -> int:
-        """Get count of unread messages for a recipient"""
+        """Get count of unread messages for a recipient.
+
+        Args:
+            recipient: Username to get unread count for
+
+        Returns:
+            int: Number of unread messages
+        """
         cursor = self.conn.cursor()
         cursor.execute(
             """
@@ -228,8 +341,17 @@ class Database:
     def delete_messages(
         self, message_ids: List[int], username: str, recipient: str
     ) -> Tuple[int, List[Tuple[str, bool]]]:
-        """Delete messages for a user (must be between sender and recipient)
-        Returns tuple of (number of messages deleted, list of (recipient, was_unread) tuples)
+        """Delete messages between two users.
+
+        Args:
+            message_ids: List of message IDs to delete
+            username: Username of the requesting user
+            recipient: Username of the other user in the conversation
+
+        Returns:
+            tuple: (number_of_messages_deleted, list_of_deleted_message_info)
+            - number_of_messages_deleted: Number of messages that were deleted
+            - list_of_deleted_message_info: List of (recipient, was_unread) tuples
         """
         deleted_info = []
         cursor = self.conn.cursor()
@@ -266,7 +388,11 @@ class Database:
         return cursor.rowcount, deleted_info
 
     def get_all_users(self) -> List[str]:
-        """Get a list of all registered users"""
+        """Get a list of all registered users.
+
+        Returns:
+            List[str]: List of all usernames
+        """
         cursor = self.conn.cursor()
         cursor.execute("SELECT username FROM users")
         return [row[0] for row in cursor.fetchall()]
@@ -274,7 +400,16 @@ class Database:
     def get_messages_between_users(
         self, user1: str, user2: str, limit: int = 50
     ) -> List[ChatMessage]:
-        """Get messages exchanged between two users"""
+        """Get chat history between two users.
+
+        Args:
+            user1: First username
+            user2: Second username
+            limit: Maximum number of messages to return
+
+        Returns:
+            List[ChatMessage]: List of messages between the users
+        """
         query = """
             SELECT m.id, m.sender, m.recipient, m.content, 
                    m.timestamp as "timestamp [TIMESTAMP]", m.message_type
@@ -310,7 +445,14 @@ class Database:
             return []
 
     def delete_user(self, username: str) -> bool:
-        """Delete a user and all their messages. Returns True if successful."""
+        """Delete a user account and all associated messages.
+
+        Args:
+            username: Username of the account to delete
+
+        Returns:
+            bool: True if user was deleted successfully
+        """
         try:
             cursor = self.conn.cursor()
             # Delete all messages where user is sender or recipient

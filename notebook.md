@@ -4,6 +4,10 @@
 
 ## 02/12
 
+### Update 2
+
+We used GPT to add docstrings and comments across all the code files. We also added `README.md` that explains the project.
+
 ### Update 1
 
 Protocol Analysis Results:

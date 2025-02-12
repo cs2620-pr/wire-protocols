@@ -1,3 +1,13 @@
+"""Wire protocol implementations for the chat application.
+
+This module provides protocol implementations for serializing and deserializing
+chat messages between client and server. It includes:
+- Abstract Protocol base class defining the interface
+- JSONProtocol implementation using JSON serialization with newline delimiters
+- CustomWireProtocol implementation using binary format for efficiency
+- Protocol metrics logging functionality
+"""
+
 from abc import ABC, abstractmethod
 import json
 from typing import Optional, Tuple
@@ -13,7 +23,17 @@ protocol_logger.addHandler(logging.NullHandler())
 def configure_protocol_logging(
     enabled: bool = False, log_file: str = "protocol_metrics.log"
 ):
-    """Configure protocol logging. If enabled, logs to file, otherwise logs are suppressed."""
+    """Configure protocol metrics logging.
+
+    Args:
+        enabled: Whether to enable logging
+        log_file: Path to the log file relative to the logs directory
+
+    The function:
+    1. Creates a logs directory if it doesn't exist
+    2. Sets up file logging if enabled
+    3. Suppresses logs if disabled
+    """
     global protocol_logger
     protocol_logger.handlers.clear()  # Remove existing handlers
 
@@ -34,15 +54,30 @@ def configure_protocol_logging(
 
 
 class Protocol(ABC):
-    """Abstract base class for different wire protocols"""
+    """Abstract base class defining the wire protocol interface.
+
+    This class defines the required methods that any protocol implementation
+    must provide for serializing and deserializing chat messages.
+
+    Attributes:
+        protocol_name (str): Name of the protocol implementation
+    """
 
     def __init__(self):
+        """Initialize the protocol with its class name."""
         self.protocol_name = self.__class__.__name__
 
     def log_message_size(
         self, message_type: str, data: bytes, direction: str, specific_type: str = ""
     ):
-        """Log the size of serialized messages"""
+        """Log metrics about message sizes.
+
+        Args:
+            message_type: Type of message (ChatMessage or ServerResponse)
+            data: The serialized message bytes
+            direction: Message direction (Incoming or Outgoing)
+            specific_type: Specific message subtype (e.g., LOGIN, CHAT)
+        """
         size = len(data)
         protocol_logger.info(
             f"{self.protocol_name} - {direction} - {message_type}{f' ({specific_type})' if specific_type else ''} - Size: {size} bytes"
@@ -50,43 +85,110 @@ class Protocol(ABC):
 
     @abstractmethod
     def serialize_message(self, message: ChatMessage, should_log: bool = True) -> bytes:
-        """Convert a ChatMessage to bytes for transmission"""
+        """Convert a ChatMessage to bytes for transmission.
+
+        Args:
+            message: The ChatMessage to serialize
+            should_log: Whether to log message metrics
+
+        Returns:
+            bytes: The serialized message
+        """
         pass
 
     @abstractmethod
     def deserialize_message(self, data: bytes, should_log: bool = True) -> ChatMessage:
-        """Convert received bytes to a ChatMessage"""
+        """Convert received bytes to a ChatMessage.
+
+        Args:
+            data: The received bytes to deserialize
+            should_log: Whether to log message metrics
+
+        Returns:
+            ChatMessage: The deserialized message
+        """
         pass
 
     @abstractmethod
     def serialize_response(
         self, response: ServerResponse, should_log: bool = True
     ) -> bytes:
-        """Convert a ServerResponse to bytes for transmission"""
+        """Convert a ServerResponse to bytes for transmission.
+
+        Args:
+            response: The ServerResponse to serialize
+            should_log: Whether to log message metrics
+
+        Returns:
+            bytes: The serialized response
+        """
         pass
 
     @abstractmethod
     def deserialize_response(
         self, data: bytes, should_log: bool = True
     ) -> ServerResponse:
-        """Convert received bytes to a ServerResponse"""
+        """Convert received bytes to a ServerResponse.
+
+        Args:
+            data: The received bytes to deserialize
+            should_log: Whether to log message metrics
+
+        Returns:
+            ServerResponse: The deserialized response
+        """
         pass
 
     @abstractmethod
     def frame_message(self, data: bytes) -> bytes:
-        """Add any necessary framing to the message (e.g., length prefix, delimiters)"""
+        """Add message framing for transmission.
+
+        Args:
+            data: The message data to frame
+
+        Returns:
+            bytes: The framed message ready for transmission
+        """
         pass
 
     @abstractmethod
     def extract_message(self, buffer: bytes) -> tuple[Optional[bytes], bytes]:
-        """Extract a complete message from a buffer of bytes, return (message, remaining_buffer)"""
+        """Extract a complete message from a buffer of received bytes.
+
+        Args:
+            buffer: Buffer containing received bytes
+
+        Returns:
+            tuple: (message_data, remaining_buffer)
+            - message_data: Complete message if one was extracted, None otherwise
+            - remaining_buffer: Remaining bytes in buffer after extraction
+        """
         pass
 
 
 class JSONProtocol(Protocol):
-    """JSON-based protocol implementation using newline as message delimiter"""
+    """JSON-based protocol implementation using newline delimiters.
+
+    This protocol:
+    - Serializes messages as JSON
+    - Uses newlines as message delimiters
+    - Enforces message size limits
+    - Provides human-readable message format
+    """
 
     def serialize_message(self, message: ChatMessage, should_log: bool = True) -> bytes:
+        """Serialize a ChatMessage to JSON bytes.
+
+        Args:
+            message: The ChatMessage to serialize
+            should_log: Whether to log message metrics
+
+        Returns:
+            bytes: JSON-encoded message
+
+        Raises:
+            ValueError: If message content exceeds size limit
+        """
         # Add size check at the beginning
         content_size = len(message.content.encode("utf-8"))
         if content_size > 1_000_000:  # 1MB limit
@@ -100,6 +202,18 @@ class JSONProtocol(Protocol):
         return data
 
     def deserialize_message(self, data: bytes, should_log: bool = True) -> ChatMessage:
+        """Deserialize JSON bytes to a ChatMessage.
+
+        Args:
+            data: The JSON bytes to deserialize
+            should_log: Whether to log message metrics
+
+        Returns:
+            ChatMessage: The deserialized message
+
+        Raises:
+            ValueError: If message content exceeds size limit
+        """
         msg = ChatMessage.model_validate_json(data.decode())
 
         # Check content size after deserialization
@@ -116,6 +230,15 @@ class JSONProtocol(Protocol):
     def serialize_response(
         self, response: ServerResponse, should_log: bool = True
     ) -> bytes:
+        """Serialize a ServerResponse to JSON bytes.
+
+        Args:
+            response: The ServerResponse to serialize
+            should_log: Whether to log message metrics
+
+        Returns:
+            bytes: JSON-encoded response
+        """
         data = response.model_dump_json().encode()
         if should_log:
             msg_type = response.data.message_type.value if response.data else "NO_DATA"
@@ -125,6 +248,15 @@ class JSONProtocol(Protocol):
     def deserialize_response(
         self, data: bytes, should_log: bool = True
     ) -> ServerResponse:
+        """Deserialize JSON bytes to a ServerResponse.
+
+        Args:
+            data: The JSON bytes to deserialize
+            should_log: Whether to log message metrics
+
+        Returns:
+            ServerResponse: The deserialized response
+        """
         resp = ServerResponse.model_validate_json(data.decode())
         if should_log:
             msg_type = resp.data.message_type.value if resp.data else "NO_DATA"
@@ -132,9 +264,27 @@ class JSONProtocol(Protocol):
         return resp
 
     def frame_message(self, data: bytes) -> bytes:
+        """Add newline delimiter to message.
+
+        Args:
+            data: Message data to frame
+
+        Returns:
+            bytes: Message with newline delimiter
+        """
         return data + b"\n"
 
     def extract_message(self, buffer: bytes) -> tuple[Optional[bytes], bytes]:
+        """Extract a newline-delimited message from the buffer.
+
+        Args:
+            buffer: Buffer containing received bytes
+
+        Returns:
+            tuple: (message_data, remaining_buffer)
+            - message_data: Complete message if newline found, None otherwise
+            - remaining_buffer: Remaining bytes after newline
+        """
         if b"\n" not in buffer:
             return None, buffer
         message, _, remaining = buffer.partition(b"\n")
@@ -149,9 +299,9 @@ from protocol import Protocol
 
 
 class CustomWireProtocol(Protocol):
-    """
-    Custom binary wire protocol implementation.
+    """Custom binary wire protocol implementation for efficient message transmission.
 
+    This protocol uses a compact binary format with the following structure:
     Overall frame:
       [1 byte: message type][4 bytes: payload length][payload]
 
@@ -168,9 +318,14 @@ class CustomWireProtocol(Protocol):
       0x09: MessageType.DELETE
       0x0A: MessageType.DELETE_NOTIFICATION
       0x0B: MessageType.DELETE_ACCOUNT
+
+    Attributes:
+        MESSAGE_TYPES (dict): Maps message type names to byte values
+        REVERSE_MESSAGE_TYPES (dict): Maps byte values to message type names
     """
 
     def __init__(self):
+        """Initialize protocol with message type mappings."""
         super().__init__()
         # Create mapping from message type value (lowercase) to hex byte value
         self.MESSAGE_TYPES = {
@@ -184,15 +339,33 @@ class CustomWireProtocol(Protocol):
             protocol_logger.debug(f"  {hex_val}: {msg_type}")
 
     def serialize_string(self, s: str) -> bytes:
-        """Serialize a string as: [4 bytes: length][N bytes: UTF-8 data]"""
+        """Serialize a string to length-prefixed bytes.
+
+        Format: [4 bytes: length][N bytes: UTF-8 data]
+
+        Args:
+            s: String to serialize
+
+        Returns:
+            bytes: Length-prefixed UTF-8 encoded string
+        """
         encoded = s.encode("utf-8")
         length = len(encoded)
         protocol_logger.debug(f"Serializing string: length={length}, content='{s}'")
         return struct.pack("!I", length) + encoded
 
     def deserialize_string(self, data: bytes, offset: int) -> Tuple[str, int]:
-        """Deserialize a length-prefixed string from offset.
-        Returns (decoded_string, new_offset)."""
+        """Deserialize a length-prefixed string from bytes.
+
+        Args:
+            data: Bytes containing the string
+            offset: Starting position in the bytes
+
+        Returns:
+            tuple: (string, new_offset)
+            - string: The deserialized string
+            - new_offset: Position after the string in the bytes
+        """
         length = struct.unpack_from("!I", data, offset)[0]
         offset += 4
         s = data[offset : offset + length].decode("utf-8")
@@ -202,14 +375,14 @@ class CustomWireProtocol(Protocol):
         offset += length
         return s, offset
 
-    # --- ChatMessage methods ---
     def serialize_message(self, message: ChatMessage, should_log: bool = True) -> bytes:
-        """
-        Serialize a ChatMessage into our custom binary format.
-        The header includes (in order):
+        """Serialize a ChatMessage to binary format.
+
+        The message format includes:
+        Header:
           1. message_type: 1 byte
           2. payload_length: 4 bytes
-        The payload includes (in order):
+        Payload:
           1. message_id: 4 bytes (0 means None)
           2. username: length-prefixed string
           3. content: length-prefixed string
@@ -219,6 +392,16 @@ class CustomWireProtocol(Protocol):
           7. password: length-prefixed string (empty if None)
           8. active_users: 1 byte count, then each as a length-prefixed string
           9. unread_count: 4 bytes (0 if not set)
+
+        Args:
+            message: The ChatMessage to serialize
+            should_log: Whether to log message metrics
+
+        Returns:
+            bytes: The serialized message
+
+        Raises:
+            ValueError: If message content exceeds size limit
         """
         # Add size check at the beginning
         content_size = len(message.content.encode("utf-8"))
@@ -288,9 +471,14 @@ class CustomWireProtocol(Protocol):
         return final_message
 
     def deserialize_message(self, data: bytes, should_log: bool = True) -> ChatMessage:
-        """
-        Deserialize a ChatMessage from data.
-        Expects: [1 byte: type][4 bytes: payload length][payload]
+        """Deserialize a binary message to ChatMessage.
+
+        Args:
+            data: The binary data to deserialize
+            should_log: Whether to log message metrics
+
+        Returns:
+            ChatMessage: The deserialized message
         """
         header_type = data[0]
         msg_type_str = self.REVERSE_MESSAGE_TYPES.get(
@@ -361,19 +549,25 @@ class CustomWireProtocol(Protocol):
             )
         return msg
 
-    # --- ServerResponse methods ---
     def serialize_response(
         self, response: ServerResponse, should_log: bool = True
     ) -> bytes:
-        """
-        Serialize a ServerResponse.
+        """Serialize a ServerResponse to binary format.
 
-        Payload fields (in order):
+        The response format includes:
+        Payload:
           1. status: 1 byte (0 for SUCCESS, 1 for ERROR)
           2. message: length-prefixed string
           3. unread_count: 4 bytes (0 if not set)
           4. data flag: 1 byte (1 if response.data exists, 0 otherwise)
-          5. (if data flag == 1) an embedded ChatMessage (with its full framing)
+          5. (if data flag == 1) an embedded ChatMessage
+
+        Args:
+            response: The ServerResponse to serialize
+            should_log: Whether to log message metrics
+
+        Returns:
+            bytes: The serialized response
         """
         header_type = self.MESSAGE_TYPES["server_response"].to_bytes(1, "big")
         protocol_logger.debug(
@@ -419,9 +613,14 @@ class CustomWireProtocol(Protocol):
     def deserialize_response(
         self, data: bytes, should_log: bool = True
     ) -> ServerResponse:
-        """
-        Deserialize a ServerResponse from data.
-        Expects: [1 byte: type][4 bytes: payload length][payload]
+        """Deserialize binary data to ServerResponse.
+
+        Args:
+            data: The binary data to deserialize
+            should_log: Whether to log message metrics
+
+        Returns:
+            ServerResponse: The deserialized response
         """
         protocol_logger.debug(
             f"Deserializing ServerResponse from data length: {len(data)} bytes"
@@ -468,20 +667,31 @@ class CustomWireProtocol(Protocol):
             self.log_message_size("ServerResponse", data, "Incoming", msg_type)
         return resp
 
-    # --- Framing and extraction ---
     def frame_message(self, data: bytes) -> bytes:
-        """
-        Each message is already framed as:
-          [1 byte: type][4 bytes: payload length][payload]
-        So simply return the data.
+        """Return the data as-is since framing is included in serialization.
+
+        Args:
+            data: The message data
+
+        Returns:
+            bytes: The same data (already framed)
         """
         protocol_logger.debug(f"Framing message: total length {len(data)} bytes")
         return data
 
     def extract_message(self, buffer: bytes) -> Tuple[Optional[bytes], bytes]:
-        """
-        Extract a complete message from the buffer.
-        Returns (message_data or None, remaining_buffer).
+        """Extract a complete message from the buffer.
+
+        Messages are expected to be in the format:
+        [1 byte: type][4 bytes: payload length][payload]
+
+        Args:
+            buffer: Buffer containing received bytes
+
+        Returns:
+            tuple: (message_data, remaining_buffer)
+            - message_data: Complete message if one was extracted, None otherwise
+            - remaining_buffer: Remaining bytes in buffer after extraction
         """
         if len(buffer) < 5:
             protocol_logger.debug(
@@ -517,10 +727,25 @@ class CustomWireProtocol(Protocol):
 
 
 class ProtocolFactory:
-    """Factory to create protocol instances"""
+    """Factory class for creating protocol instances.
+
+    This class provides a single static method for creating protocol
+    instances based on the requested protocol type.
+    """
 
     @staticmethod
     def create(protocol_type: str) -> Protocol:
+        """Create a protocol instance of the specified type.
+
+        Args:
+            protocol_type: Type of protocol to create ("json" or "custom")
+
+        Returns:
+            Protocol: The created protocol instance
+
+        Raises:
+            ValueError: If protocol_type is not recognized
+        """
         if protocol_type == "json":
             return JSONProtocol()
         elif protocol_type == "custom":
