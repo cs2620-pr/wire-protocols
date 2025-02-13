@@ -144,31 +144,37 @@ class ChatServer:
             sender_socket: The socket of the sending client
 
         The function:
-        1. Validates the recipient exists
+        1. Validates all recipients exist
         2. Stores the message in the database
-        3. Delivers to recipient if online
+        3. Delivers to all recipients if online
         4. Sends confirmation back to sender
         """
         if not message.recipients:
             return
 
+        # Validate message content
+        if not message.content or message.content.isspace():
+            self.send_error(sender_socket, "Empty message not allowed")
+            return
+
         db = self.db()
 
-        # Validate recipient exists
-        recipient = message.recipients[0]
-        if not db.user_exists(recipient):
-            self.send_error(sender_socket, f"User '{recipient}' does not exist")
-            return
+        # Validate all recipients exist
+        for recipient in message.recipients:
+            if not db.user_exists(recipient):
+                self.send_error(sender_socket, f"User '{recipient}' does not exist")
+                return
 
         # Store the message
         message_id = db.store_message(message)
         message.message_id = message_id
 
-        # Send to recipient if they're online
-        if recipient in self.usernames:
-            recipient_socket = self.usernames[recipient]
-            if self.send_to_client(recipient_socket, message):
-                db.mark_delivered(message_id)
+        # Send to all recipients if they're online
+        for recipient in message.recipients:
+            if recipient in self.usernames:
+                recipient_socket = self.usernames[recipient]
+                if self.send_to_client(recipient_socket, message):
+                    db.mark_delivered(message_id)
 
         # Also send back to sender so they see their own message with the ID
         if message.username in self.usernames:

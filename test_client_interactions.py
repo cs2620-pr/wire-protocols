@@ -3,6 +3,7 @@ import socket
 import threading
 import time
 from datetime import datetime
+from gui_client import ChatClient
 from server import ChatServer
 from database import Database
 from schemas import ChatMessage, MessageType, SystemMessage, Status, ServerResponse
@@ -290,94 +291,94 @@ class TestClientInteractions:
             bob.close()
             charlie.close()
 
-    # def test_message_persistence(self, test_server, protocol):
-    #     """Test message persistence when users are offline"""
-    #     alice = self.create_client_socket()
-    #     bob = self.create_client_socket()
-    #     try:
-    #         # Register and login users
-    #         assert self.register_user(alice, protocol, "alice", "pass123")
-    #         assert self.login_user(alice, protocol, "alice", "pass123")
-    #         assert self.register_user(bob, protocol, "bob", "pass456")
-    #         assert self.login_user(bob, protocol, "bob", "pass456")
+    def test_message_persistence(self, test_server, protocol):
+        """Test message persistence when users are offline"""
+        alice = self.create_client_socket()
+        bob = self.create_client_socket()
+        try:
+            # Register and login users
+            assert self.register_user(alice, protocol, "alice", "pass123")
+            assert self.login_user(alice, protocol, "alice", "pass123")
+            assert self.register_user(bob, protocol, "bob", "pass456")
+            assert self.login_user(bob, protocol, "bob", "pass456")
 
-    #         # Consume initial notifications
-    #         self.consume_notifications(alice, protocol)
-    #         self.consume_notifications(bob, protocol)
+            # Consume initial notifications
+            self.consume_notifications(alice, protocol)
+            self.consume_notifications(bob, protocol)
 
-    #         # Bob logs out
-    #         bob.close()
+            # Bob logs out
+            bob.close()
 
-    #         # Wait for and consume Bob's logout notification
-    #         response = self.receive_message(alice, protocol)
-    #         assert "logged out" in response.data.content.lower()
-    #         assert "bob" in response.data.content.lower()
+            # Wait for and consume Bob's logout notification
+            response = self.receive_message(alice, protocol)
+            assert "logged out" in response.data.content.lower()
+            assert "bob" in response.data.content.lower()
 
-    #         # Alice sends messages while Bob is offline
-    #         messages = ["First message", "Second message", "Third message"]
-    #         for msg in messages:
-    #             self.send_message(
-    #                 alice,
-    #                 protocol,
-    #                 "alice",
-    #                 msg,
-    #                 recipients=["bob"],
-    #                 message_type=MessageType.DM,
-    #             )
-    #             # Alice should receive her own message
-    #             response = self.receive_message(alice, protocol)
-    #             assert response.data.content == msg
-    #             assert response.data.username == "alice"
+            # Alice sends messages while Bob is offline
+            messages = ["First message", "Second message", "Third message"]
+            for msg in messages:
+                self.send_message(
+                    alice,
+                    protocol,
+                    "alice",
+                    msg,
+                    recipients=["bob"],
+                    message_type=MessageType.DM,
+                )
+                # Alice should receive her own message
+                response = self.receive_message(alice, protocol)
+                assert response.data.content == msg
+                assert response.data.username == "alice"
 
-    #         # Bob logs back in
-    #         bob = self.create_client_socket()
-    #         assert self.login_user(bob, protocol, "bob", "pass456")
+            # Bob logs back in
+            bob = self.create_client_socket()
+            assert self.login_user(bob, protocol, "bob", "pass456")
 
-    #         # Bob should receive unread message notification
-    #         response = self.receive_message(bob, protocol)
-    #         assert "unread messages" in response.data.content.lower()
-    #         assert "3" in response.data.content  # Should have 3 unread messages
+            # Bob should receive unread message notification
+            response = self.receive_message(bob, protocol)
+            assert "unread messages" in response.data.content.lower()
+            assert "3" in response.data.content  # Should have 3 unread messages
 
-    #         # Fetch unread messages
-    #         fetch_msg = ChatMessage(
-    #             username="bob",
-    #             content="",
-    #             message_type=MessageType.FETCH,
-    #             timestamp=datetime.now(),
-    #         )
-    #         data = protocol.serialize_message(fetch_msg)
-    #         framed_data = protocol.frame_message(data)
-    #         bob.send(framed_data)
+            # Fetch unread messages
+            fetch_msg = ChatMessage(
+                username="bob",
+                content="",
+                message_type=MessageType.FETCH,
+                timestamp=datetime.now(),
+            )
+            data = protocol.serialize_message(fetch_msg)
+            framed_data = protocol.frame_message(data)
+            bob.send(framed_data)
 
-    #         # Verify messages are received in order
-    #         received_messages = []
-    #         for _ in range(len(messages)):
-    #             response = self.receive_message(bob, protocol)
-    #             assert response.data.username == "alice"
-    #             received_messages.append(response.data.content)
+            # Verify messages are received in order
+            received_messages = []
+            for _ in range(len(messages)):
+                response = self.receive_message(bob, protocol)
+                assert response.data.username == "alice"
+                received_messages.append(response.data.content)
 
-    #         # Verify message order is preserved
-    #         assert received_messages == messages
+            # Verify message order is preserved
+            assert received_messages == messages
 
-    #         # Mark messages as read
-    #         mark_read_msg = ChatMessage(
-    #             username="bob",
-    #             content="",
-    #             message_type=MessageType.MARK_READ,
-    #             recipients=["alice"],  # Mark all messages from Alice as read
-    #             timestamp=datetime.now(),
-    #         )
-    #         data = protocol.serialize_message(mark_read_msg)
-    #         framed_data = protocol.frame_message(data)
-    #         bob.send(framed_data)
+            # Mark messages as read
+            mark_read_msg = ChatMessage(
+                username="bob",
+                content="",
+                message_type=MessageType.MARK_READ,
+                recipients=["alice"],  # Mark all messages from Alice as read
+                timestamp=datetime.now(),
+            )
+            data = protocol.serialize_message(mark_read_msg)
+            framed_data = protocol.frame_message(data)
+            bob.send(framed_data)
 
-    #         # Verify unread count is updated
-    #         response = self.receive_message(bob, protocol)
-    #         assert response.data.unread_count == 0
+            # Verify unread count is updated
+            response = self.receive_message(bob, protocol)
+            assert response.data.unread_count == 0
 
-    #     finally:
-    #         alice.close()
-    #         bob.close()
+        finally:
+            alice.close()
+            bob.close()
 
     def test_user_presence(self, test_server, protocol):
         """Test user presence notifications"""
@@ -673,117 +674,117 @@ class TestClientInteractions:
                 except:
                     pass
 
-    # def test_message_persistence_with_multiple_messages(self, test_server, protocol):
-    #     """Test message persistence with multiple messages and multiple recipients"""
-    #     alice = self.create_client_socket()
-    #     bob = self.create_client_socket()
-    #     charlie = self.create_client_socket()
-    #     try:
-    #         # Register and login users
-    #         assert self.register_user(alice, protocol, "alice", "pass123")
-    #         assert self.login_user(alice, protocol, "alice", "pass123")
-    #         assert self.register_user(bob, protocol, "bob", "pass456")
-    #         assert self.login_user(bob, protocol, "bob", "pass456")
-    #         assert self.register_user(charlie, protocol, "charlie", "pass789")
-    #         assert self.login_user(charlie, protocol, "charlie", "pass789")
+    def test_message_persistence_with_multiple_messages(self, test_server, protocol):
+        """Test message persistence with multiple messages and multiple recipients"""
+        alice = self.create_client_socket()
+        bob = self.create_client_socket()
+        charlie = self.create_client_socket()
+        try:
+            # Register and login users
+            assert self.register_user(alice, protocol, "alice", "pass123")
+            assert self.login_user(alice, protocol, "alice", "pass123")
+            assert self.register_user(bob, protocol, "bob", "pass456")
+            assert self.login_user(bob, protocol, "bob", "pass456")
+            assert self.register_user(charlie, protocol, "charlie", "pass789")
+            assert self.login_user(charlie, protocol, "charlie", "pass789")
 
-    #         # Consume initial notifications with reduced timeout
-    #         self.consume_notifications(alice, protocol, timeout=0.2)
-    #         self.consume_notifications(bob, protocol, timeout=0.2)
-    #         self.consume_notifications(charlie, protocol, timeout=0.2)
+            # Consume initial notifications with reduced timeout
+            self.consume_notifications(alice, protocol, timeout=0.2)
+            self.consume_notifications(bob, protocol, timeout=0.2)
+            self.consume_notifications(charlie, protocol, timeout=0.2)
 
-    #         # Bob and Charlie log out
-    #         bob.close()
-    #         charlie.close()
-    #         time.sleep(0.05)  # Reduced from implicit longer wait
+            # Bob and Charlie log out
+            bob.close()
+            charlie.close()
+            time.sleep(0.05)  # Reduced from implicit longer wait
 
-    #         # Alice sends multiple messages
-    #         messages = [
-    #             ("bob", "First message for Bob"),
-    #             ("charlie", "First message for Charlie"),
-    #             ("bob", "Second message for Bob"),
-    #             ("charlie", "Second message for Charlie"),
-    #         ]
+            # Alice sends multiple messages
+            messages = [
+                ("bob", "First message for Bob"),
+                ("charlie", "First message for Charlie"),
+                ("bob", "Second message for Bob"),
+                ("charlie", "Second message for Charlie"),
+            ]
 
-    #         for recipient, content in messages:
-    #             self.send_message(
-    #                 alice,
-    #                 protocol,
-    #                 "alice",
-    #                 content,
-    #                 recipients=[recipient],
-    #                 message_type=MessageType.DM,
-    #             )
-    #             time.sleep(0.05)  # Add small delay between messages
+            for recipient, content in messages:
+                self.send_message(
+                    alice,
+                    protocol,
+                    "alice",
+                    content,
+                    recipients=[recipient],
+                    message_type=MessageType.DM,
+                )
+                time.sleep(0.05)  # Add small delay between messages
 
-    #         # Bob logs back in
-    #         bob = self.create_client_socket()
-    #         assert self.login_user(bob, protocol, "bob", "pass456")
+            # Bob logs back in
+            bob = self.create_client_socket()
+            assert self.login_user(bob, protocol, "bob", "pass456")
 
-    #         # Verify Bob's unread message notification
-    #         response = self.receive_message(bob, protocol, timeout=0.5)
-    #         assert "unread messages" in response.data.content.lower()
+            # Verify Bob's unread message notification
+            response = self.receive_message(bob, protocol, timeout=0.5)
+            assert "unread messages" in response.data.content.lower()
 
-    #         # Fetch Bob's messages
-    #         fetch_msg = ChatMessage(
-    #             username="bob",
-    #             content="",
-    #             message_type=MessageType.FETCH,
-    #             timestamp=datetime.now(),
-    #         )
-    #         data = protocol.serialize_message(fetch_msg)
-    #         framed_data = protocol.frame_message(data)
-    #         bob.send(framed_data)
+            # Fetch Bob's messages
+            fetch_msg = ChatMessage(
+                username="bob",
+                content="",
+                message_type=MessageType.FETCH,
+                timestamp=datetime.now(),
+            )
+            data = protocol.serialize_message(fetch_msg)
+            framed_data = protocol.frame_message(data)
+            bob.send(framed_data)
 
-    #         # Verify Bob receives his messages in order
-    #         bob_messages = []
-    #         for _ in range(2):  # Expect 2 messages
-    #             response = self.receive_message(bob, protocol, timeout=0.5)
-    #             assert response.data.username == "alice"
-    #             bob_messages.append(response.data.content)
+            # Verify Bob receives his messages in order
+            bob_messages = []
+            for _ in range(2):  # Expect 2 messages
+                response = self.receive_message(bob, protocol, timeout=0.5)
+                assert response.data.username == "alice"
+                bob_messages.append(response.data.content)
 
-    #         assert "First message for Bob" in bob_messages
-    #         assert "Second message for Bob" in bob_messages
-    #         assert bob_messages.index("First message for Bob") < bob_messages.index(
-    #             "Second message for Bob"
-    #         )
+            assert "First message for Bob" in bob_messages
+            assert "Second message for Bob" in bob_messages
+            assert bob_messages.index("First message for Bob") < bob_messages.index(
+                "Second message for Bob"
+            )
 
-    #         # Charlie logs back in
-    #         charlie = self.create_client_socket()
-    #         assert self.login_user(charlie, protocol, "charlie", "pass789")
+            # Charlie logs back in
+            charlie = self.create_client_socket()
+            assert self.login_user(charlie, protocol, "charlie", "pass789")
 
-    #         # Verify Charlie's unread message notification
-    #         response = self.receive_message(charlie, protocol, timeout=0.5)
-    #         assert "unread messages" in response.data.content.lower()
+            # Verify Charlie's unread message notification
+            response = self.receive_message(charlie, protocol, timeout=0.5)
+            assert "unread messages" in response.data.content.lower()
 
-    #         # Fetch Charlie's messages
-    #         fetch_msg = ChatMessage(
-    #             username="charlie",
-    #             content="",
-    #             message_type=MessageType.FETCH,
-    #             timestamp=datetime.now(),
-    #         )
-    #         data = protocol.serialize_message(fetch_msg)
-    #         framed_data = protocol.frame_message(data)
-    #         charlie.send(framed_data)
+            # Fetch Charlie's messages
+            fetch_msg = ChatMessage(
+                username="charlie",
+                content="",
+                message_type=MessageType.FETCH,
+                timestamp=datetime.now(),
+            )
+            data = protocol.serialize_message(fetch_msg)
+            framed_data = protocol.frame_message(data)
+            charlie.send(framed_data)
 
-    #         # Verify Charlie receives his messages in order
-    #         charlie_messages = []
-    #         for _ in range(2):  # Expect 2 messages
-    #             response = self.receive_message(charlie, protocol, timeout=0.5)
-    #             assert response.data.username == "alice"
-    #             charlie_messages.append(response.data.content)
+            # Verify Charlie receives his messages in order
+            charlie_messages = []
+            for _ in range(2):  # Expect 2 messages
+                response = self.receive_message(charlie, protocol, timeout=0.5)
+                assert response.data.username == "alice"
+                charlie_messages.append(response.data.content)
 
-    #         assert "First message for Charlie" in charlie_messages
-    #         assert "Second message for Charlie" in charlie_messages
-    #         assert charlie_messages.index(
-    #             "First message for Charlie"
-    #         ) < charlie_messages.index("Second message for Charlie")
+            assert "First message for Charlie" in charlie_messages
+            assert "Second message for Charlie" in charlie_messages
+            assert charlie_messages.index(
+                "First message for Charlie"
+            ) < charlie_messages.index("Second message for Charlie")
 
-    #     finally:
-    #         alice.close()
-    #         bob.close()
-    #         charlie.close()
+        finally:
+            alice.close()
+            bob.close()
+            charlie.close()
 
     def test_message_mark_read(self, test_server, protocol):
         """Test marking messages as read"""
@@ -951,6 +952,386 @@ class TestClientInteractions:
                     client.shutdown(socket.SHUT_RDWR)
                 except:
                     pass
+                try:
+                    client.close()
+                except:
+                    pass
+
+    def test_user_filtering(self, test_server, protocol):
+        """Test user filtering functionality"""
+        # Create multiple clients
+        alice = self.create_client_socket()
+        bob = self.create_client_socket()
+        bobby = self.create_client_socket()
+        charlie = self.create_client_socket()
+        try:
+            # Register and login users
+            assert self.register_user(alice, protocol, "alice", "pass123")
+            assert self.login_user(alice, protocol, "alice", "pass123")
+            assert self.register_user(bob, protocol, "bob", "pass456")
+            assert self.login_user(bob, protocol, "bob", "pass456")
+            assert self.register_user(bobby, protocol, "bobby", "pass789")
+            assert self.login_user(bobby, protocol, "bobby", "pass789")
+            assert self.register_user(charlie, protocol, "charlie", "pass012")
+            assert self.login_user(charlie, protocol, "charlie", "pass012")
+
+            # Create a ChatClient instance to test is_prefix_match
+            test_client = ChatClient("test_user")
+
+            # Test is_prefix_match function
+            assert test_client.is_prefix_match("bobby", "bob")  # Should match
+            assert test_client.is_prefix_match("bob", "bob")  # Exact match
+            assert test_client.is_prefix_match("bobby", "b")  # Single letter match
+            assert not test_client.is_prefix_match("alice", "bob")  # Should not match
+            assert not test_client.is_prefix_match(
+                "bob", "bobby"
+            )  # Pattern longer than string
+            assert test_client.is_prefix_match("charlie", "char")  # Partial match
+            assert test_client.is_prefix_match("BOBBY", "bob")  # Case-insensitive match
+
+            # Test with empty pattern
+            assert test_client.is_prefix_match(
+                "bob", ""
+            )  # Empty pattern should match anything
+
+            # Test with empty string
+            assert not test_client.is_prefix_match(
+                "", "bob"
+            )  # Empty string shouldn't match non-empty pattern
+
+            # Test with special characters
+            assert test_client.is_prefix_match(
+                "bob_smith", "bob"
+            )  # Match with underscore
+            assert test_client.is_prefix_match("bob123", "bob")  # Match with numbers
+
+        finally:
+            alice.close()
+            bob.close()
+            bobby.close()
+            charlie.close()
+
+    def test_user_filtering_with_disconnections(self, test_server, protocol):
+        """Test user filtering with users connecting and disconnecting"""
+        alice = self.create_client_socket()
+        bob = self.create_client_socket()
+        bobby = self.create_client_socket()
+        try:
+            # Register and login users
+            assert self.register_user(alice, protocol, "alice", "pass123")
+            assert self.login_user(alice, protocol, "alice", "pass123")
+            assert self.register_user(bob, protocol, "bob", "pass456")
+            assert self.login_user(bob, protocol, "bob", "pass456")
+            assert self.register_user(bobby, protocol, "bobby", "pass789")
+            assert self.login_user(bobby, protocol, "bobby", "pass789")
+
+            # Consume initial notifications
+            self.consume_notifications(alice, protocol)
+            self.consume_notifications(bob, protocol)
+            self.consume_notifications(bobby, protocol)
+
+            # Test filtering behavior when users disconnect
+            bob.close()
+            time.sleep(0.1)  # Wait for logout to process
+
+            # Create a test client to verify filtering still works
+            test_client = ChatClient("test_user")
+            assert test_client.is_prefix_match(
+                "bobby", "bob"
+            )  # Should still match offline users
+
+            # Verify that bobby is still matched even though bob disconnected
+            assert test_client.is_prefix_match("bobby", "bob")
+
+            # Test with a new connection
+            charlie = self.create_client_socket()
+            assert self.register_user(charlie, protocol, "charlie", "pass012")
+            assert self.login_user(charlie, protocol, "charlie", "pass012")
+
+            # Verify new user can be matched
+            assert test_client.is_prefix_match("charlie", "char")
+
+        finally:
+            alice.close()
+            bobby.close()
+            if "charlie" in locals():
+                charlie.close()
+
+    def test_user_filtering_edge_cases(self, test_server, protocol):
+        """Test edge cases for user filtering"""
+        test_client = ChatClient("test_user")
+
+        # Test with various special characters
+        assert test_client.is_prefix_match("bob_smith", "bob")
+        assert test_client.is_prefix_match("bob.smith", "bob")
+        assert test_client.is_prefix_match("bob-smith", "bob")
+        assert test_client.is_prefix_match("bob123", "bob")
+
+        # Test case sensitivity
+        assert test_client.is_prefix_match("BOB", "bob")
+        assert test_client.is_prefix_match("Bob", "bob")
+        assert test_client.is_prefix_match("bob", "BOB")
+
+        # Test with spaces
+        assert test_client.is_prefix_match("bob smith", "bob")
+        assert test_client.is_prefix_match("bob smith", "smith")
+
+        # Test with very long strings
+        long_name = "x" * 1000 + "bob"
+        assert test_client.is_prefix_match(long_name, "bob")
+
+        # Test with very long pattern
+        long_pattern = "x" * 1000
+        assert not test_client.is_prefix_match("bob", long_pattern)
+
+        # Test with unicode characters
+        assert test_client.is_prefix_match("böb", "b")
+        assert test_client.is_prefix_match("büb", "b")
+        assert test_client.is_prefix_match("bôb", "b")
+        assert not test_client.is_prefix_match("bôb", "bob")
+
+    def test_username_validation_with_special_chars(self, test_server, protocol):
+        """Test username validation with various special characters"""
+        invalid_usernames = [
+            "user@name",  # @ symbol
+            "user/name",  # forward slash
+            "user\\name",  # backslash
+            "user#name",  # hash
+            "user$name",  # dollar sign
+            "user name",  # space
+            "user!name",  # exclamation mark
+            "user.name",  # period
+        ]
+
+        for username in invalid_usernames:
+            client = self.create_client_socket()
+            try:
+                # Send registration request
+                register_msg = ChatMessage(
+                    username=username,
+                    password="pass123",
+                    content="",
+                    message_type=MessageType.REGISTER,
+                )
+                data = protocol.serialize_message(register_msg)
+                framed_data = protocol.frame_message(data)
+                client.send(framed_data)
+
+                # Wait for response with increased timeout
+                response = self.receive_message(client, protocol, timeout=2.0)
+                assert (
+                    response is not None
+                ), f"No response received for username: {username}"
+                assert response.status == Status.ERROR
+                assert response.message == SystemMessage.INVALID_USERNAME
+            finally:
+                client.close()
+
+    def test_password_validation(self, test_server, protocol):
+        """Test password validation rules"""
+        client = self.create_client_socket()
+        try:
+            # Test empty password
+            register_msg = ChatMessage(
+                username="testuser1",
+                password="",
+                content="",
+                message_type=MessageType.REGISTER,
+            )
+            data = protocol.serialize_message(register_msg)
+            framed_data = protocol.frame_message(data)
+            client.send(framed_data)
+
+            response = self.receive_message(client, protocol, timeout=2.0)
+            assert response is not None, "No response received for empty password"
+            assert response.status == Status.ERROR
+            assert response.message == SystemMessage.PASSWORD_REQUIRED
+
+            # Test very long password (should be accepted)
+            client.close()
+            client = self.create_client_socket()
+            long_password = "a" * 100
+            assert self.register_user(client, protocol, "testuser2", long_password)
+        finally:
+            client.close()
+
+    def test_concurrent_registration(self, test_server, protocol):
+        """Test concurrent registration attempts with the same username"""
+        username = "concurrent_user"
+        password = "pass123"
+
+        # Create multiple client sockets
+        num_clients = 3
+        clients = []
+        responses = []
+
+        try:
+            # Create and connect clients one at a time
+            for i in range(num_clients):
+                client = self.create_client_socket()
+                clients.append(client)
+
+                # Send registration request
+                register_msg = ChatMessage(
+                    username=username,
+                    password=password,
+                    content="",
+                    message_type=MessageType.REGISTER,
+                )
+                data = protocol.serialize_message(register_msg)
+                framed_data = protocol.frame_message(data)
+                client.send(framed_data)
+
+                # Wait for response with retries
+                response = None
+                max_retries = 3
+                for _ in range(max_retries):
+                    response = self.receive_message(client, protocol, timeout=1.0)
+                    if response is not None:
+                        break
+                    time.sleep(0.1)
+
+                assert response is not None, f"No response received for client {i}"
+                responses.append(response)
+
+            # Count successful registrations
+            success_count = sum(
+                1 for resp in responses if resp.status == Status.SUCCESS
+            )
+
+            # Verify responses
+            assert (
+                success_count == 1
+            ), f"Expected 1 successful registration, got {success_count}"
+
+            # Verify error messages for failed registrations
+            for resp in responses:
+                if resp.status == Status.ERROR:
+                    assert resp.message in [
+                        SystemMessage.USER_EXISTS,
+                        SystemMessage.REGISTRATION_FAILED,
+                    ], f"Unexpected error message: {resp.message}"
+
+        finally:
+            for client in clients:
+                try:
+                    client.close()
+                except:
+                    pass
+
+    def test_login_with_active_session(self, test_server, protocol):
+        """Test login attempts while another session is active"""
+        username = "active_user"
+        password = "pass123"
+
+        # First client registers and logs in
+        client1 = self.create_client_socket()
+        try:
+            assert self.register_user(client1, protocol, username, password)
+            assert self.login_user(client1, protocol, username, password)
+            time.sleep(0.5)  # Wait for login to complete
+
+            # Second client tries to log in with same credentials
+            client2 = self.create_client_socket()
+            try:
+                login_msg = ChatMessage(
+                    username=username,
+                    password=password,
+                    content="",
+                    message_type=MessageType.LOGIN,
+                )
+                data = protocol.serialize_message(login_msg)
+                framed_data = protocol.frame_message(data)
+                client2.send(framed_data)
+
+                # Should receive error about already logged in
+                response = self.receive_message(client2, protocol, timeout=2.0)
+                assert (
+                    response is not None
+                ), "No response received for second login attempt"
+                assert response.status == Status.ERROR
+                assert response.message == SystemMessage.USER_ALREADY_LOGGED_IN
+
+                # First client logs out
+                logout_msg = ChatMessage(
+                    username=username,
+                    content="",
+                    message_type=MessageType.LOGOUT,
+                )
+                data = protocol.serialize_message(logout_msg)
+                framed_data = protocol.frame_message(data)
+                client1.send(framed_data)
+                client1.close()
+                time.sleep(1.0)  # Give server time to process logout
+
+                # Second client should now be able to log in
+                client2 = self.create_client_socket()  # Create new socket after delay
+                assert self.login_user(client2, protocol, username, password)
+
+            finally:
+                client2.close()
+        finally:
+            client1.close()
+
+    def test_user_list_updates(self, test_server, protocol):
+        """Test user list updates when users go offline/online"""
+        # Create and register three users
+        alice = self.create_client_socket()
+        bob = self.create_client_socket()
+        charlie = self.create_client_socket()
+
+        try:
+            # Register and login users
+            assert self.register_user(alice, protocol, "alice", "pass123")
+            assert self.login_user(alice, protocol, "alice", "pass123")
+
+            # Consume initial notifications
+            self.consume_notifications(alice, protocol)
+
+            # Register and login Bob
+            assert self.register_user(bob, protocol, "bob", "pass456")
+            assert self.login_user(bob, protocol, "bob", "pass456")
+
+            # Alice should receive notification about Bob
+            response = self.receive_message(alice, protocol)
+            assert response is not None
+            assert response.data is not None
+            assert "bob has joined" in response.data.content.lower()
+
+            # Register and login Charlie
+            assert self.register_user(charlie, protocol, "charlie", "pass789")
+            assert self.login_user(charlie, protocol, "charlie", "pass789")
+
+            # Both Alice and Bob should receive notification about Charlie
+            for client in [alice, bob]:
+                response = self.receive_message(client, protocol)
+                assert response is not None
+                assert response.data is not None
+                assert "charlie has joined" in response.data.content.lower()
+
+            # Bob logs out
+            bob.close()
+            time.sleep(0.1)  # Give server time to process logout
+
+            # Alice and Charlie should receive logout notification
+            for client in [alice, charlie]:
+                response = self.receive_message(client, protocol)
+                assert response is not None
+                assert response.data is not None
+                assert "bob has logged out" in response.data.content.lower()
+
+            # Bob logs back in
+            bob = self.create_client_socket()
+            assert self.login_user(bob, protocol, "bob", "pass456")
+
+            # Alice and Charlie should receive join notification
+            for client in [alice, charlie]:
+                response = self.receive_message(client, protocol)
+                assert response is not None
+                assert response.data is not None
+                assert "bob has joined" in response.data.content.lower()
+        finally:
+            for client in [alice, bob, charlie]:
                 try:
                     client.close()
                 except:

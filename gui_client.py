@@ -300,10 +300,21 @@ class ChatWindow(QMainWindow):
         right_panel_width = 200
 
         user_list_layout.addWidget(QLabel("Other Users:"))
+
+        # Add search input field
+        self.user_search_input = QLineEdit()
+        self.user_search_input.setPlaceholderText("Search users...")
+        self.user_search_input.setMaximumWidth(right_panel_width)
+        self.user_search_input.textChanged.connect(self.filter_users)
+        user_list_layout.addWidget(self.user_search_input)
+
         self.user_list = QListWidget()
         self.user_list.setMaximumWidth(right_panel_width)  # Set consistent width
         self.user_list.itemClicked.connect(self.on_user_clicked)
         user_list_layout.addWidget(self.user_list)
+
+        # Store original user data for filtering
+        self.all_users_data = []  # List of tuples (username, is_active, unread_count)
 
         # Initialize system message display first
         self.system_message_display = QTextEdit()
@@ -640,7 +651,6 @@ class ChatWindow(QMainWindow):
         if not self.client:
             return
 
-        self.user_list.clear()
         self.active_users = set(active_users)  # Update active users set
 
         # Update current user status
@@ -651,13 +661,41 @@ class ChatWindow(QMainWindow):
             user for user in sorted(set(all_users)) if user != self.client.username
         ]
 
-        # Add other users to the list
+        # Store the complete user data for filtering
+        self.all_users_data = []
         for user in other_users:
-            status = "🟢" if user in active_users else "⚪"
-            text = f"{status} {user}"
-            if user in self.unread_counts and self.unread_counts[user] > 0:
-                text = f"{text} ({self.unread_counts[user]})"
-            self.user_list.addItem(text)
+            is_active = user in active_users
+            unread_count = self.unread_counts.get(user, 0)
+            self.all_users_data.append((user, is_active, unread_count))
+
+        # Apply current filter
+        self.filter_users(
+            self.user_search_input.text() if hasattr(self, "user_search_input") else ""
+        )
+
+    def filter_users(self, search_text: str):
+        """Filter the user list based on search text.
+
+        Args:
+            search_text: The search pattern to filter by
+        """
+        if not hasattr(self, "all_users_data") or not self.client:
+            return
+
+        self.user_list.clear()
+        search_text = search_text.strip().lower()
+
+        for username, is_active, unread_count in self.all_users_data:
+            # If there's no search text, show all users
+            # Otherwise, use prefix match to filter
+            if not search_text or self.client.is_prefix_match(
+                username.lower(), search_text
+            ):
+                status = "🟢" if is_active else "⚪"
+                text = f"{status} {username}"
+                if unread_count > 0:
+                    text = f"{text} ({unread_count})"
+                self.user_list.addItem(text)
 
     def handle_server_message(self, message: ChatMessage):
         """Handle incoming server messages and update UI accordingly.
@@ -1034,6 +1072,16 @@ class ChatClient:
         self.receive_buffer = b""
         self.unread_messages: Set[int] = set()
         self.is_voluntary_disconnect = False
+
+    def is_prefix_match(self, string: str, pattern: str) -> bool:
+        string_idx = pattern_idx = 0
+        string = string.lower()
+        pattern = pattern.lower()
+        while string_idx < len(string) and pattern_idx < len(pattern):
+            if string[string_idx] == pattern[pattern_idx]:
+                pattern_idx += 1
+            string_idx += 1
+        return pattern_idx == len(pattern)
 
     def connect(self) -> bool:
         """Connect to the chat server.
