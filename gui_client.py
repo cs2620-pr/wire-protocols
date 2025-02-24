@@ -269,10 +269,21 @@ class ChatWindow(QMainWindow):
         right_panel_width = 200
 
         user_list_layout.addWidget(QLabel("Other Users:"))
+
+        # Add search input field
+        self.user_search_input = QLineEdit()
+        self.user_search_input.setPlaceholderText("Search users...")
+        self.user_search_input.setMaximumWidth(right_panel_width)
+        self.user_search_input.textChanged.connect(self.filter_users)
+        user_list_layout.addWidget(self.user_search_input)
+
         self.user_list = QListWidget()
         self.user_list.setMaximumWidth(right_panel_width)  # Set consistent width
         self.user_list.itemClicked.connect(self.on_user_clicked)
         user_list_layout.addWidget(self.user_list)
+
+        # Store original user data for filtering
+        self.all_users_data = []  # List of tuples (username, is_active, unread_count)
 
         # Initialize system message display first
         self.system_message_display = QTextEdit()
@@ -904,8 +915,8 @@ class ChatWindow(QMainWindow):
 #         self.unread_messages: Set[int] = set()
 #         self.is_voluntary_disconnect = False
 
-#     def connect(self) -> bool:
-#         """Connect to the chat server.
+    def connect(self) -> bool:
+        """Connect to the chat server.
 
 #         Returns:
 #             bool: True if connection successful
