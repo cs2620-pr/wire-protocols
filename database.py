@@ -64,9 +64,14 @@ class Database:
         sqlite3.register_adapter(datetime, adapt_datetime)
         sqlite3.register_converter("TIMESTAMP", convert_datetime)
         # Connect with type detection
-        self.conn = sqlite3.connect(
-            self.db_path, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES
-        )
+        def get_connection(self):
+            """Create a new SQLite connection for each thread-safe operation."""
+            conn = sqlite3.connect(
+                self.db_path, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES
+            )
+            conn.row_factory = sqlite3.Row  # Enable named column access
+            return conn
+
         self.init_db()
 
     def __del__(self):

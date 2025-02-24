@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+package chat;
+
+service ChatService {
+    rpc Register(UserCredentials) returns (ServerResponse);
+    rpc Login(UserCredentials) returns (LoginResponse);
+    rpc ListAccounts(ListRequest) returns (UserList);
+    rpc SendMessage(ChatRequest) returns (ServerResponse);
+    rpc FetchMessages(FetchRequest) returns (stream ChatResponse);
+    rpc DeleteMessages(DeleteRequest) returns (ServerResponse);
+    rpc DeleteAccount(UserCredentials) returns (ServerResponse);
+}
+
+message UserCredentials {
+    string username = 1;
+    string password = 2;
+}
+
+message ServerResponse {
+    string status = 1;
+    string message = 2;
+}
+
+message LoginResponse {
+    string status = 1;
+    string message = 2;
+    int32 unread_messages = 3;
+}
+
+message ListRequest {
+    string pattern = 1;  // Wildcard pattern to match usernames
+}
+
+message UserList {
+    repeated string usernames = 1;
+}
+
+message ChatRequest {
+    string sender = 1;
+    string recipient = 2;
+    string content = 3;
+    int64 timestamp = 4;
+}
+
+message ChatResponse {
+    string sender = 1;
+    string recipient = 2;
+    string content = 3;
+    int64 timestamp = 4;
+}
+
+message FetchRequest {
+    string username = 1;
+    int32 limit = 2;
+}
+
+message DeleteRequest {
+    string username = 1;
+    repeated int32 message_ids = 2;
+}

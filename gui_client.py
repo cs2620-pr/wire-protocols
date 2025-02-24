@@ -144,54 +144,23 @@ class ReceiveThread(QThread):
         """
         super().__init__()
         self.client = client
+        self.running = True
 
     def run(self):
-        """Main thread loop for receiving and processing messages."""
-        while self.client.connected:
-            try:
-                data = self.client.client_socket.recv(1024)
-                if not data:
-                    self.message_received.emit("Connection closed by server", None)
-                    self.connection_lost.emit()
+        """Main loop for receiving messages via gRPC streaming."""
+        try:
+            for msg in self.client.fetch_messages():
+                if not self.running:
                     break
+                formatted_message = f"{msg.sender}: {msg.content}"
+                self.message_received.emit(formatted_message, msg)
+        except grpc.RpcError as e:
+            print(f"Error in message receiving: {e}")
+            self.connection_lost.emit()
 
-                self.client.receive_buffer += data
-                while True:
-                    message_data, self.client.receive_buffer = (
-                        self.client.protocol.extract_message(self.client.receive_buffer)
-                    )
-                    if message_data is None:
-                        break
-
-                    response = self.client.protocol.deserialize_response(message_data)
-                    if response.status == Status.ERROR:
-                        self.message_received.emit(f"Error: {response.message}", None)
-                        if "not logged in" in response.message.lower():
-                            self.connection_lost.emit()
-                            break
-                        continue
-
-                    if response.data is None:
-                        self.message_received.emit(response.message, None)
-                        continue
-
-                    if isinstance(response.data, list):
-                        for msg in response.data:
-                            self.message_received.emit(
-                                f"{msg.username}: {str(msg)}", msg
-                            )
-                    else:
-                        self.message_received.emit(
-                            f"{response.data.username}: {str(response.data)}",
-                            response.data,
-                        )
-
-            except Exception as e:
-                if self.client.connected:
-                    self.message_received.emit(f"Error receiving message: {e}", None)
-                break
-
-        self.connection_lost.emit()
+    def stop(self):
+        """Stop the thread safely."""
+        self.running = False
 
 
 class ChatWindow(QMainWindow):
@@ -367,73 +336,26 @@ class ChatWindow(QMainWindow):
             self.close()  # This will trigger closeEvent which exits the app
 
     def connect_to_server(self, username: str, password: str, action: str) -> bool:
-        """Connect to the chat server and authenticate.
+        """Connect to the chat server and authenticate."""
+        self.client = ChatClient(username)
+        
+        if action == "register":
+            message = self.client.register(password)
+        else:
+            message, unread_count = self.client.login(password)
 
-        Args:
-            username: User's username
-            password: User's password
-            action: Either "login" or "register"
-
-        Returns:
-            bool: True if connection and authentication successful
-        """
-        self.client = ChatClient(
-            username,
-            protocol=ProtocolFactory.create(self.protocol_type),
-            host=self.server_host,
-            port=self.server_port,
-        )
-
-        if not self.client.connect():
-            QMessageBox.critical(
-                self,
-                "Connection Error",
-                SystemMessage.CONNECTION_ERROR,
-            )
-            self.client.disconnect()  # Ensure socket is closed
+        if "success" in message.lower():
+            self.receive_thread = ReceiveThread(self.client)
+            self.receive_thread.message_received.connect(self.handle_message)
+            self.receive_thread.connection_lost.connect(self.handle_disconnection)
+            self.receive_thread.start()
+            
+            self.set_ui_enabled(True)
+            self.setWindowTitle(f"Chat Client - {username}")
+            return True
+        else:
             return False
 
-        if not self.client.authenticate(password, action):
-            # Error message is already shown in authenticate method
-            self.client.disconnect()  # Ensure socket is closed
-            return False
-
-        # Start receive thread
-        self.receive_thread = ReceiveThread(self.client)
-        self.receive_thread.message_received.connect(self.handle_message)
-        self.receive_thread.connection_lost.connect(self.handle_disconnection)
-        self.receive_thread.start()
-
-        # Enable UI elements
-        self.set_ui_enabled(True)
-
-        # Clear previous system messages
-        if self.system_message_display:
-            self.system_message_display.clear()
-
-        # Display system message
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        html = f"""
-            <div style="margin: 4px 0;">
-                <span style="color: #888888;">[{timestamp}]</span> Connected to server!
-            </div>
-        """
-        if self.system_message_display:
-            self.system_message_display.append(html)
-
-        # Update window title to include username
-        self.setWindowTitle(f"Chat Client - {username}")
-
-        # Fetch unread messages to update unread counts
-        fetch_message = ChatMessage(
-            username=self.client.username,
-            content="",
-            message_type=MessageType.FETCH,
-            fetch_count=50,  # Fetch last 50 messages to get unread counts
-        )
-        self.client.send_message(fetch_message)
-
-        return True
 
     def update_theme(self):
         """Update the chat display theme based on system colors."""
@@ -510,22 +432,16 @@ class ChatWindow(QMainWindow):
 
     def send_message(self):
         """Send a message to the current chat user."""
-        if not self.client or not self.client.connected or not self.current_chat_user:
+        if not self.client or not self.current_chat_user:
             return
 
         message = self.message_input.text().strip()
         if not message:
             return
 
-        # Always send as DM when in a chat
-        dm_content = f"{self.current_chat_user};{message}"
-        if self.client.send_chat_message(dm_content):
-            # Message will be displayed when we receive it back from the server with the message ID
-            pass
-        else:
-            self.handle_disconnection()
-
+        self.client.send_message(self.current_chat_user, message)
         self.message_input.clear()
+
 
     def fetch_messages(self):
         """Fetch message history from the server."""
@@ -543,24 +459,19 @@ class ChatWindow(QMainWindow):
         self.client.mark_messages_read()
 
     def delete_messages(self):
-        """Delete selected messages from the current chat."""
-        if not self.client or not self.client.connected or not self.current_chat_user:
+        """Delete selected messages."""
+        if not self.client or not self.current_chat_user:
             QMessageBox.warning(self, "Error", "Please select a chat first")
             return
 
-        message_ids_text, ok = QInputDialog.getText(
-            self, "Delete Messages", "Enter message IDs to delete (space-separated):"
-        )
-
+        message_ids_text, ok = QInputDialog.getText(self, "Delete Messages", "Enter message IDs to delete:")
         if ok and message_ids_text:
             try:
                 message_ids = [int(id) for id in message_ids_text.split()]
-                self.client.delete_messages(message_ids, self.current_chat_user)
-                # Immediately refresh our own chat
-                self.chat_display.clear()
-                self.load_chat_history(self.current_chat_user)
+                self.client.delete_messages(message_ids)
+                QMessageBox.information(self, "Success", "Messages deleted")
             except ValueError:
-                QMessageBox.warning(self, "Error", SystemMessage.INVALID_MESSAGE_IDS)
+                QMessageBox.warning(self, "Error", "Invalid message ID format")
 
     def logout(self):
         """Handle user logout and cleanup."""
@@ -630,34 +541,13 @@ class ChatWindow(QMainWindow):
         event.accept()
         QApplication.instance().quit()
 
-    def update_user_list(self, all_users: List[str], active_users: List[str]):
-        """Update the user list display with online/offline status.
-
-        Args:
-            all_users: List of all registered users
-            active_users: List of currently active users
-        """
-        if not self.client:
-            return
-
+    def update_user_list(self):
+        """Update the user list display."""
+        all_users = self.client.list_accounts()
         self.user_list.clear()
-        self.active_users = set(active_users)  # Update active users set
+        for user in all_users:
+            self.user_list.addItem(user)
 
-        # Update current user status
-        self.current_user_label.setText(f"🟢 You ({self.client.username})")
-
-        # Filter out current user from the lists
-        other_users = [
-            user for user in sorted(set(all_users)) if user != self.client.username
-        ]
-
-        # Add other users to the list
-        for user in other_users:
-            status = "🟢" if user in active_users else "⚪"
-            text = f"{status} {user}"
-            if user in self.unread_counts and self.unread_counts[user] > 0:
-                text = f"{text} ({self.unread_counts[user]})"
-            self.user_list.addItem(text)
 
     def handle_server_message(self, message: ChatMessage):
         """Handle incoming server messages and update UI accordingly.
@@ -809,33 +699,12 @@ class ChatWindow(QMainWindow):
                 break
 
     def delete_account(self):
-        """Handle account deletion with confirmation."""
-        reply = QMessageBox.question(
-            self,
-            "Delete Account",
-            "Are you sure you want to delete your account?\nThis action cannot be undone!",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-
-        if reply == QMessageBox.Yes:
-            # Send delete account message
-            delete_message = ChatMessage(
-                username=self.client.username,
-                content="",
-                message_type=MessageType.DELETE_ACCOUNT,
-            )
-            if self.client.send_message(delete_message):
-                # Set voluntary disconnect flag to prevent connection lost message
-                self.client.is_voluntary_disconnect = True
-                # Close the window and show login dialog
-                self.close()
-                QMessageBox.information(
-                    self,
-                    "Account Deleted",
-                    "Your account has been deleted successfully.",
-                )
-                self.show_login_dialog()
+        """Delete the user's account."""
+        password, ok = QInputDialog.getText(self, "Delete Account", "Enter your password:", QLineEdit.Password)
+        if ok:
+            response = self.client.delete_account(password)
+            QMessageBox.information(self, "Account Deletion", response)
+            self.logout()
 
     def handle_message(self, message: str, message_obj: Optional[ChatMessage] = None):
         """Handle incoming messages and update UI accordingly.
@@ -990,241 +859,282 @@ class ChatWindow(QMainWindow):
             self.chat_display.append(html)
 
 
+# class ChatClient:
+#     """Client for connecting to and communicating with the chat server.
+
+#     This class handles:
+#     - Server connection and authentication
+#     - Message sending and receiving
+#     - Protocol handling
+#     - Connection state management
+
+#     Attributes:
+#         username (str): Client's username
+#         host (str): Server hostname
+#         port (int): Server port number
+#         connected (bool): Connection state
+#         protocol (Protocol): Protocol implementation
+#         unread_messages (Set[int]): Set of unread message IDs
+#         is_voluntary_disconnect (bool): Whether disconnect was user-initiated
+#     """
+
+#     def __init__(
+#         self,
+#         username: str,
+#         protocol: Optional[Protocol] = None,
+#         host: str = "localhost",
+#         port: int = 8000,
+#     ):
+#         """Initialize the chat client.
+
+#         Args:
+#             username: Client's username
+#             protocol: Protocol implementation to use
+#             host: Server hostname
+#             port: Server port number
+#         """
+#         self.username = username
+#         self.host = host
+#         self.port = port
+#         self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+#         self.connected = False
+#         self._lock = threading.Lock()
+#         self.protocol = protocol or ProtocolFactory.create("json")
+#         self.receive_buffer = b""
+#         self.unread_messages: Set[int] = set()
+#         self.is_voluntary_disconnect = False
+
+#     def connect(self) -> bool:
+#         """Connect to the chat server.
+
+#         Returns:
+#             bool: True if connection successful
+#         """
+#         try:
+#             self.client_socket.connect((self.host, self.port))
+#             self.connected = True
+#             return True
+#         except Exception as e:
+#             print(f"Connection failed: {e}")
+#             return False
+
+#     def authenticate(self, password: str, action: str) -> bool:
+#         """Authenticate with the server.
+
+#         Args:
+#             password: User's password
+#             action: Either "login" or "register"
+
+#         Returns:
+#             bool: True if authentication successful
+#         """
+#         message = ChatMessage(
+#             username=self.username,
+#             content="",
+#             message_type=(
+#                 MessageType.LOGIN if action == "login" else MessageType.REGISTER
+#             ),
+#             password=password,
+#         )
+
+#         if not self.send_message(message):
+#             return False
+
+#         try:
+#             data = self.client_socket.recv(1024)
+#             if not data:
+#                 return False
+
+#             self.receive_buffer += data
+#             message_data, self.receive_buffer = self.protocol.extract_message(
+#                 self.receive_buffer
+#             )
+#             if message_data is None:
+#                 return False
+
+#             response = self.protocol.deserialize_response(message_data)
+
+#             if response.status == Status.SUCCESS:
+#                 if action == "register":
+#                     # Show registration success message
+#                     QMessageBox.information(
+#                         None, "Success", "Registration successful! Logging in..."
+#                     )
+#                     # Try logging in with the same credentials
+#                     return self.authenticate(password, "login")
+#                 return True
+#             else:
+#                 # Show the specific error message from the server
+#                 QMessageBox.critical(None, "Error", response.message)
+#                 return False
+
+#         except Exception as e:
+#             print(f"Authentication error: {e}")
+#             return False
+
+#         return False
+
+#     def send_message(self, message: ChatMessage) -> bool:
+#         """Send a message to the server.
+
+#         Args:
+#             message: The message to send
+
+#         Returns:
+#             bool: True if message sent successfully
+#         """
+#         if not self.connected:
+#             return False
+
+#         try:
+#             with self._lock:
+#                 data = self.protocol.serialize_message(message)
+#                 framed_data = self.protocol.frame_message(data)
+#                 self.client_socket.send(framed_data)
+#                 return True
+#         except Exception as e:
+#             print(f"Error sending message: {e}")
+#             self.connected = False
+#             return False
+
+#     def send_chat_message(self, content: str) -> bool:
+#         """Send a chat message or direct message.
+
+#         Args:
+#             content: Message content (may include recipient prefix)
+
+#         Returns:
+#             bool: True if message sent successfully
+#         """
+#         if ";" in content:
+#             recipient, message_content = content.split(";", 1)
+#             recipient = recipient.strip()
+#             message_content = message_content.strip()
+
+#             if not recipient or not message_content:
+#                 return False
+
+#             message = ChatMessage(
+#                 username=self.username,
+#                 content=message_content,
+#                 message_type=MessageType.DM,
+#                 recipients=[recipient],
+#             )
+#         else:
+#             message = ChatMessage(
+#                 username=self.username, content=content, message_type=MessageType.CHAT
+#             )
+
+#         return self.send_message(message)
+
+#     def fetch_messages(self, count: int = 10):
+#         """Request message history from the server.
+
+#         Args:
+#             count: Number of messages to fetch
+#         """
+#         fetch_message = ChatMessage(
+#             username=self.username,
+#             content="",
+#             message_type=MessageType.FETCH,
+#             fetch_count=count,
+#         )
+#         self.send_message(fetch_message)
+
+#     def mark_messages_read(self):
+#         """Mark unread messages as read."""
+#         if not self.unread_messages:
+#             return
+
+#         mark_read_message = ChatMessage(
+#             username=self.username,
+#             content="",
+#             message_type=MessageType.MARK_READ,
+#             message_ids=list(self.unread_messages),
+#         )
+#         if self.send_message(mark_read_message):
+#             self.unread_messages.clear()
+
+#     def delete_messages(self, message_ids: List[int], recipient: str):
+#         """Delete specific messages.
+
+#         Args:
+#             message_ids: List of message IDs to delete
+#             recipient: Username of the message recipient
+#         """
+#         delete_message = ChatMessage(
+#             username=self.username,
+#             content="",
+#             message_type=MessageType.DELETE,
+#             message_ids=message_ids,
+#             recipients=[recipient],
+#         )
+#         self.send_message(delete_message)
+
+#     def disconnect(self):
+#         """Disconnect from the server and cleanup."""
+#         if not self.connected:
+#             return
+
+#         self.connected = False
+#         try:
+#             logout_message = ChatMessage(
+#                 username=self.username,
+#                 content=f"{self.username} has left the chat",
+#                 message_type=MessageType.LOGOUT,
+#             )
+#             data = self.protocol.serialize_message(logout_message)
+#             framed_data = self.protocol.frame_message(data)
+#             self.client_socket.send(framed_data)
+#         except Exception:
+#             pass
+#         finally:
+#             try:
+#                 self.client_socket.shutdown(socket.SHUT_RDWR)
+#             except OSError:
+#                 pass
+#             self.client_socket.close()
+
+import grpc
+import protocol_pb2
+import protocol_pb2_grpc
+from PyQt5.QtCore import QThread, pyqtSignal
+
 class ChatClient:
-    """Client for connecting to and communicating with the chat server.
-
-    This class handles:
-    - Server connection and authentication
-    - Message sending and receiving
-    - Protocol handling
-    - Connection state management
-
-    Attributes:
-        username (str): Client's username
-        host (str): Server hostname
-        port (int): Server port number
-        connected (bool): Connection state
-        protocol (Protocol): Protocol implementation
-        unread_messages (Set[int]): Set of unread message IDs
-        is_voluntary_disconnect (bool): Whether disconnect was user-initiated
-    """
-
-    def __init__(
-        self,
-        username: str,
-        protocol: Optional[Protocol] = None,
-        host: str = "localhost",
-        port: int = 8000,
-    ):
-        """Initialize the chat client.
-
-        Args:
-            username: Client's username
-            protocol: Protocol implementation to use
-            host: Server hostname
-            port: Server port number
-        """
+    def __init__(self, username, server_address="localhost:50051"):
         self.username = username
-        self.host = host
-        self.port = port
-        self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.connected = False
-        self._lock = threading.Lock()
-        self.protocol = protocol or ProtocolFactory.create("json")
-        self.receive_buffer = b""
-        self.unread_messages: Set[int] = set()
-        self.is_voluntary_disconnect = False
+        self.channel = grpc.insecure_channel(server_address)
+        self.stub = protocol_pb2_grpc.ChatServiceStub(self.channel)
 
-    def connect(self) -> bool:
-        """Connect to the chat server.
+    def register(self, password):
+        response = self.stub.Register(protocol_pb2.UserCredentials(username=self.username, password=password))
+        return response.message
 
-        Returns:
-            bool: True if connection successful
-        """
-        try:
-            self.client_socket.connect((self.host, self.port))
-            self.connected = True
-            return True
-        except Exception as e:
-            print(f"Connection failed: {e}")
-            return False
+    def login(self, password):
+        response = self.stub.Login(protocol_pb2.UserCredentials(username=self.username, password=password))
+        return response.message, response.unread_messages
 
-    def authenticate(self, password: str, action: str) -> bool:
-        """Authenticate with the server.
+    def list_accounts(self, pattern=""):
+        response = self.stub.ListAccounts(protocol_pb2.ListRequest(pattern=pattern))
+        return response.usernames
 
-        Args:
-            password: User's password
-            action: Either "login" or "register"
+    def send_message(self, recipient, content):
+        self.stub.SendMessage(protocol_pb2.ChatRequest(
+            sender=self.username,
+            recipient=recipient,
+            content=content,
+            timestamp=0  # Server will handle the actual timestamp
+        ))
 
-        Returns:
-            bool: True if authentication successful
-        """
-        message = ChatMessage(
-            username=self.username,
-            content="",
-            message_type=(
-                MessageType.LOGIN if action == "login" else MessageType.REGISTER
-            ),
-            password=password,
-        )
+    def fetch_messages(self, limit=10):
+        return self.stub.FetchMessages(protocol_pb2.FetchRequest(username=self.username, limit=limit))
 
-        if not self.send_message(message):
-            return False
+    def delete_messages(self, message_ids):
+        self.stub.DeleteMessages(protocol_pb2.DeleteRequest(username=self.username, message_ids=message_ids))
 
-        try:
-            data = self.client_socket.recv(1024)
-            if not data:
-                return False
-
-            self.receive_buffer += data
-            message_data, self.receive_buffer = self.protocol.extract_message(
-                self.receive_buffer
-            )
-            if message_data is None:
-                return False
-
-            response = self.protocol.deserialize_response(message_data)
-
-            if response.status == Status.SUCCESS:
-                if action == "register":
-                    # Show registration success message
-                    QMessageBox.information(
-                        None, "Success", "Registration successful! Logging in..."
-                    )
-                    # Try logging in with the same credentials
-                    return self.authenticate(password, "login")
-                return True
-            else:
-                # Show the specific error message from the server
-                QMessageBox.critical(None, "Error", response.message)
-                return False
-
-        except Exception as e:
-            print(f"Authentication error: {e}")
-            return False
-
-        return False
-
-    def send_message(self, message: ChatMessage) -> bool:
-        """Send a message to the server.
-
-        Args:
-            message: The message to send
-
-        Returns:
-            bool: True if message sent successfully
-        """
-        if not self.connected:
-            return False
-
-        try:
-            with self._lock:
-                data = self.protocol.serialize_message(message)
-                framed_data = self.protocol.frame_message(data)
-                self.client_socket.send(framed_data)
-                return True
-        except Exception as e:
-            print(f"Error sending message: {e}")
-            self.connected = False
-            return False
-
-    def send_chat_message(self, content: str) -> bool:
-        """Send a chat message or direct message.
-
-        Args:
-            content: Message content (may include recipient prefix)
-
-        Returns:
-            bool: True if message sent successfully
-        """
-        if ";" in content:
-            recipient, message_content = content.split(";", 1)
-            recipient = recipient.strip()
-            message_content = message_content.strip()
-
-            if not recipient or not message_content:
-                return False
-
-            message = ChatMessage(
-                username=self.username,
-                content=message_content,
-                message_type=MessageType.DM,
-                recipients=[recipient],
-            )
-        else:
-            message = ChatMessage(
-                username=self.username, content=content, message_type=MessageType.CHAT
-            )
-
-        return self.send_message(message)
-
-    def fetch_messages(self, count: int = 10):
-        """Request message history from the server.
-
-        Args:
-            count: Number of messages to fetch
-        """
-        fetch_message = ChatMessage(
-            username=self.username,
-            content="",
-            message_type=MessageType.FETCH,
-            fetch_count=count,
-        )
-        self.send_message(fetch_message)
-
-    def mark_messages_read(self):
-        """Mark unread messages as read."""
-        if not self.unread_messages:
-            return
-
-        mark_read_message = ChatMessage(
-            username=self.username,
-            content="",
-            message_type=MessageType.MARK_READ,
-            message_ids=list(self.unread_messages),
-        )
-        if self.send_message(mark_read_message):
-            self.unread_messages.clear()
-
-    def delete_messages(self, message_ids: List[int], recipient: str):
-        """Delete specific messages.
-
-        Args:
-            message_ids: List of message IDs to delete
-            recipient: Username of the message recipient
-        """
-        delete_message = ChatMessage(
-            username=self.username,
-            content="",
-            message_type=MessageType.DELETE,
-            message_ids=message_ids,
-            recipients=[recipient],
-        )
-        self.send_message(delete_message)
-
-    def disconnect(self):
-        """Disconnect from the server and cleanup."""
-        if not self.connected:
-            return
-
-        self.connected = False
-        try:
-            logout_message = ChatMessage(
-                username=self.username,
-                content=f"{self.username} has left the chat",
-                message_type=MessageType.LOGOUT,
-            )
-            data = self.protocol.serialize_message(logout_message)
-            framed_data = self.protocol.frame_message(data)
-            self.client_socket.send(framed_data)
-        except Exception:
-            pass
-        finally:
-            try:
-                self.client_socket.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-            self.client_socket.close()
+    def delete_account(self, password):
+        response = self.stub.DeleteAccount(protocol_pb2.UserCredentials(username=self.username, password=password))
+        return response.message
 
 
 def main():
